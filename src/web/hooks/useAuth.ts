@@ -65,15 +65,18 @@ export function useAuth(): void {
   useEffect(() => {
     // Check if token exists in URL fragment
     const fragmentToken = extractTokenFromFragment();
-    
+
     if (fragmentToken) {
       // Store token in cookie
       setAuthToken(fragmentToken);
-      
+
       // Clear fragment from URL
       clearFragment();
-      
+
       console.log('Authentication token stored successfully');
+
+      // Reload page to apply authentication
+      window.location.reload();
     }
   }, []);
 }

@@ -196,33 +196,36 @@ export class FileSystemService {
     
     // Additional security checks
     const segments = normalizedPath.split(path.sep);
-    
-    for (const segment of segments) {
+
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
       if (!segment) continue;
-      
+
       // Check for hidden files/directories
       if (segment.startsWith('.')) {
-        this.logger.warn('Hidden file/directory detected', { 
-          requestedPath, 
-          segment 
+        this.logger.warn('Hidden file/directory detected', {
+          requestedPath,
+          segment
         });
         throw new CUIError('INVALID_PATH', 'Path contains hidden files/directories', 400);
       }
-      
+
       // Check for null bytes
       if (segment.includes('\u0000')) {
-        this.logger.warn('Null byte detected in path', { 
-          requestedPath, 
-          segment 
+        this.logger.warn('Null byte detected in path', {
+          requestedPath,
+          segment
         });
         throw new CUIError('INVALID_PATH', 'Path contains null bytes', 400);
       }
-      
+
       // Check for invalid characters
-      if (/[<>:|?*]/.test(segment)) {
-        this.logger.warn('Invalid characters detected in path', { 
-          requestedPath, 
-          segment 
+      // On Windows, allow colon in the first segment if it's a drive letter (e.g., C:)
+      const isWindowsDrive = i === 0 && process.platform === 'win32' && /^[a-zA-Z]:$/.test(segment);
+      if (!isWindowsDrive && /[<>:|?*]/.test(segment)) {
+        this.logger.warn('Invalid characters detected in path', {
+          requestedPath,
+          segment
         });
         throw new CUIError('INVALID_PATH', 'Path contains invalid characters', 400);
       }

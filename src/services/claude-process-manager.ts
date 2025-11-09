@@ -62,39 +62,42 @@ export class ClaudeProcessManager extends EventEmitter {
    * Since @anthropic-ai/claude-code is a dependency, claude should be in node_modules/.bin
    */
   private findClaudeExecutable(): string {
+    const isWindows = process.platform === 'win32';
+    const claudeExeName = isWindows ? 'claude.cmd' : 'claude';
+
     // When running as an npm package, find claude relative to this module
     // __dirname will be something like /path/to/node_modules/cui-server/dist/services
     const packageRoot = path.resolve(__dirname, '..', '..');
-    const claudePath = path.join(packageRoot, 'node_modules', '.bin', 'claude');
-    
+    const claudePath = path.join(packageRoot, 'node_modules', '.bin', claudeExeName);
+
     if (existsSync(claudePath)) {
       return claudePath;
     }
-    
+
     // Try from the parent node_modules (when cui-server is installed as a dependency)
     // packageRoot -> /node_modules/cui-server
     // parent -> /node_modules, so /node_modules/.bin/claude
-    const parentModulesPath = path.resolve(packageRoot, '..', '.bin', 'claude');
+    const parentModulesPath = path.resolve(packageRoot, '..', '.bin', claudeExeName);
     if (existsSync(parentModulesPath)) {
       return parentModulesPath;
     }
-    
+
     // Fallback: try from current working directory (for local development)
-    const cwdPath = path.join(process.cwd(), 'node_modules', '.bin', 'claude');
+    const cwdPath = path.join(process.cwd(), 'node_modules', '.bin', claudeExeName);
     if (existsSync(cwdPath)) {
       return cwdPath;
     }
-    
+
     // Final fallback: try to locate on PATH
     const pathEnv = process.env.PATH || '';
     const pathDirs = pathEnv.split(path.delimiter);
     for (const dir of pathDirs) {
-      const candidate = path.join(dir, 'claude');
+      const candidate = path.join(dir, claudeExeName);
       if (existsSync(candidate)) {
         return candidate;
       }
     }
-    
+
     throw new Error('Claude executable not found in node_modules. Ensure @anthropic-ai/claude-code is installed.');
   }
 
@@ -788,10 +791,19 @@ export class ClaudeProcessManager extends EventEmitter {
         }, {} as Record<string, string | undefined>)
       });
       
-      const claudeProcess = spawn(executablePath, args, {
+      // On Windows, use shell option to handle .cmd files and paths with spaces
+      const isWindows = process.platform === 'win32';
+
+      // When using shell on Windows, quote the executable path if it contains spaces
+      const finalExecutablePath = isWindows && executablePath.includes(' ')
+        ? `"${executablePath}"`
+        : executablePath;
+
+      const claudeProcess = spawn(finalExecutablePath, args, {
         cwd,
         env,
-        stdio: ['inherit', 'pipe', 'pipe'] // stdin inherited, stdout/stderr piped for capture
+        stdio: ['inherit', 'pipe', 'pipe'], // stdin inherited, stdout/stderr piped for capture
+        shell: isWindows // Use shell on Windows to properly handle .cmd files and paths with spaces
       });
       
       // Handle spawn errors (like ENOENT when claude is not found)

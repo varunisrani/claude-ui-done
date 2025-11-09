@@ -101,4 +101,4 @@ jspm_packages/
 .vscode-test
 
 # Git worktrees
-cc-worktrees/
+cc-worktrees/nul
