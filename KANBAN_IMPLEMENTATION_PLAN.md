@@ -1,6 +1,6 @@
-# Kanban Board with Agent Task Management - Implementation Plan
+# Kanban Board with Agent Task Management - Implementation Plan (localStorage-Based)
 
-> **Vision**: Transform CUI Server into an agent task management platform where users can create tasks on a Kanban board, assign them to Claude agents, monitor progress in real-time, and let agents work in the background while maintaining full visibility and control.
+> **Vision**: Add a Kanban board interface to CUI Server where users can create tasks, assign them to Claude agents, and monitor progress in real-time - all using browser localStorage for persistence (no backend database changes needed).
 
 ---
 
@@ -23,21 +23,26 @@
 
 **Kanban Board for Agent Task Management** - A visual project management interface where:
 
-1. **Tasks as Agents**: Each task is a Claude agent conversation
+1. **Tasks as Agents**: Each task can be assigned to a Claude agent conversation
 2. **Three Columns**:
    - **New** - Tasks waiting to be assigned
    - **In Progress** - Tasks actively being worked on by agents
    - **Done** - Completed tasks
 
-3. **Task Assignment Flow**:
-   - Create task on Kanban board → Assign to agent → Agent starts working
-   - Type in chat → Auto-create task → Agent responds
-   - Tasks run in background, user can check progress anytime
+3. **Data Storage**:
+   - **localStorage** - All tasks stored in browser localStorage (no backend database)
+   - Persists across browser sessions
+   - Tasks linked to existing conversation sessionIds
 
-4. **Background Execution**:
-   - User can close chat, agent continues working
-   - Real-time progress updates via SSE
-   - Status syncs across Kanban board and chat interface
+4. **Task Assignment Flow**:
+   - Create task on Kanban board → Assign to agent → Agent starts working
+   - Uses existing `/api/conversations/start` endpoint
+   - Task status tracked in localStorage
+
+5. **Background Execution**:
+   - User can close chat, agent continues working (existing feature)
+   - Real-time progress updates via existing SSE
+   - Status syncs between localStorage and UI
 
 ---
 
@@ -218,70 +223,57 @@
 │                                 │                                   │
 │  ┌──────────────────────────────┴───────────────────────────────┐  │
 │  │           KanbanContext (Global State)                        │  │
-│  │  - boards[]                                                   │  │
-│  │  - tasks[]                                                    │  │
+│  │  - boards[]  (React state)                                    │  │
+│  │  - tasks[]   (React state)                                    │  │
 │  │  - activeTaskId                                               │  │
-│  │  - streamStatus (from StreamStatusContext)                   │  │
+│  │  - Syncs with localStorage on every change                   │  │
 │  └───────────────────────────────┬───────────────────────────────┘  │
 │                                  │                                  │
 │  ┌───────────────────────────────┴───────────────────────────────┐  │
-│  │               API Service (HTTP + SSE)                         │  │
-│  │  - createTask()                                                │  │
-│  │  - assignTaskToAgent()                                         │  │
-│  │  - moveTask()                                                  │  │
-│  │  - subscribeToTaskUpdates()                                    │  │
+│  │             LocalStorage Service Layer                         │  │
+│  │  - saveTask(task)           → localStorage.setItem()          │  │
+│  │  - getTasks()               → localStorage.getItem()          │  │
+│  │  - updateTask(id, updates)  → localStorage.setItem()          │  │
+│  │  - deleteTask(id)           → localStorage.setItem()          │  │
+│  │                                                                │  │
+│  │  Storage Keys:                                                 │  │
+│  │    - 'kanban_boards'  → Board configurations                  │  │
+│  │    - 'kanban_tasks'   → All Kanban tasks                      │  │
+│  └───────────────────────────────┬───────────────────────────────┘  │
+│                                  │                                  │
+│  ┌───────────────────────────────┴───────────────────────────────┐  │
+│  │           Existing API Service (HTTP + SSE)                    │  │
+│  │  - Uses EXISTING endpoints:                                    │  │
+│  │    POST /api/conversations/start  (assign task to agent)      │  │
+│  │    GET  /api/stream/:streamingId  (real-time updates)         │  │
+│  │    POST /api/conversations/:streamingId/stop (stop agent)     │  │
 │  └───────────────────────────────┬───────────────────────────────┘  │
 └─────────────────────────────────┬┼───────────────────────────────────┘
                                   ││
                         HTTP/REST ││ SSE (EventSource)
                                   ││
 ┌─────────────────────────────────┴┴───────────────────────────────────┐
-│                      BACKEND (Express.js)                            │
+│                  BACKEND (Express.js) - NO CHANGES                   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                       │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │                   API Routes Layer                             │  │
-│  │  /api/kanban/tasks        (KanbanRoutes)                       │  │
-│  │  /api/conversations       (ConversationRoutes)                 │  │
-│  │  /api/stream              (StreamingRoutes)                    │  │
+│  │                 Existing API Routes (Used)                     │  │
+│  │  /api/conversations/start     → Start agent conversation       │  │
+│  │  /api/stream/:streamingId     → SSE stream for updates        │  │
+│  │  /api/conversations/:id/stop  → Stop agent                     │  │
 │  └──────────────────────┬─────────────────────────────────────────┘  │
 │                         │                                            │
 │  ┌──────────────────────┴─────────────────────────────────────────┐  │
-│  │                   Service Layer                                │  │
+│  │              Existing Services (No Changes)                    │  │
 │  │                                                                │  │
-│  │  ┌─────────────────┐  ┌──────────────────┐  ┌──────────────┐  │  │
-│  │  │ KanbanService   │  │ ProcessManager   │  │ StreamMgr    │  │  │
-│  │  │                 │  │                  │  │              │  │  │
-│  │  │ - createTask    │  │ - startConv      │  │ - broadcast  │  │  │
-│  │  │ - moveTask      │  │ - killProcess    │  │ - addClient  │  │  │
-│  │  │ - updateStatus  │  │ - getProcessInfo │  │ - sendEvent  │  │  │
-│  │  └────────┬────────┘  └────────┬─────────┘  └──────┬───────┘  │  │
-│  │           │                    │                    │          │  │
-│  │           └────────────────────┼────────────────────┘          │  │
-│  │                                │                                │  │
-│  │  ┌─────────────────────────────┴──────────────────────────────┐  │
-│  │  │           ConversationStatusManager                         │  │
-│  │  │  - registerActiveSession(streamingId, sessionId, context)   │  │
-│  │  │  - getConversationStatus(sessionId)                         │  │
-│  │  │  - emit session events                                      │  │
-│  │  └─────────────────────────────┬──────────────────────────────┘  │
-│  └─────────────────────────────────┼─────────────────────────────────┘
-│                                    │                                  │
-│  ┌─────────────────────────────────┴──────────────────────────────┐  │
-│  │              SessionInfoService (SQLite)                        │  │
-│  │  ~/.cui/session-info.db                                         │  │
-│  │                                                                 │  │
-│  │  sessions table:                                                │  │
-│  │    - session_id (PK)                                            │  │
-│  │    - custom_name                                                │  │
-│  │    - kanban_column (NEW)                                        │  │
-│  │    - kanban_position (NEW)                                      │  │
-│  │    - priority (NEW)                                             │  │
-│  │    - tags (NEW)                                                 │  │
-│  │    - created_at, updated_at                                     │  │
+│  │  ┌──────────────────┐  ┌──────────────┐                       │  │
+│  │  │ ProcessManager   │  │ StreamMgr    │                       │  │
+│  │  │ - startConv      │  │ - broadcast  │                       │  │
+│  │  │ - killProcess    │  │ - addClient  │                       │  │
+│  │  │ - getProcessInfo │  │ - sendEvent  │                       │  │
+│  │  └──────────────────┘  └──────────────┘                       │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
-│                                    │                                  │
-└────────────────────────────────────┼──────────────────────────────────┘
+└────────────────────────────────────┬────────────────────────────────┘
                                      │ Child Process
                                      ▼
                     ┌────────────────────────────────┐
@@ -293,6 +285,8 @@
                     │  - Streams JSONL output        │
                     │  - Runs in background          │
                     └────────────────────────────────┘
+
+NOTE: All Kanban data stored in browser localStorage - no backend changes required!
 ```
 
 ### Component Interaction Flow
@@ -403,23 +397,54 @@ USER ACTION                    FRONTEND                   BACKEND
 
 ## Data Models
 
-### Enhanced Session Schema (SQLite)
+### LocalStorage Data Structure
 
-```sql
--- Extend existing sessions table with Kanban fields
-ALTER TABLE sessions ADD COLUMN kanban_board_id TEXT DEFAULT 'default';
-ALTER TABLE sessions ADD COLUMN kanban_column TEXT DEFAULT NULL;
-ALTER TABLE sessions ADD COLUMN kanban_position INTEGER DEFAULT NULL;
-ALTER TABLE sessions ADD COLUMN priority TEXT DEFAULT 'medium';
-ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT '[]'; -- JSON array
-ALTER TABLE sessions ADD COLUMN task_status TEXT DEFAULT NULL;
-ALTER TABLE sessions ADD COLUMN assigned_at TEXT DEFAULT NULL;
-ALTER TABLE sessions ADD COLUMN completed_at TEXT DEFAULT NULL;
-ALTER TABLE sessions ADD COLUMN agent_status TEXT DEFAULT NULL; -- 'active', 'paused', 'completed', 'error'
+**No SQL database changes needed!** All Kanban data stored in browser localStorage:
 
--- Create index for efficient Kanban queries
-CREATE INDEX IF NOT EXISTS idx_kanban_column ON sessions(kanban_board_id, kanban_column, kanban_position);
-CREATE INDEX IF NOT EXISTS idx_task_status ON sessions(task_status, agent_status);
+```typescript
+// Storage Key: 'kanban_boards'
+interface KanbanBoardsStorage {
+  boards: {
+    id: string;
+    name: string;
+    columns: {
+      id: string;
+      name: string;
+      position: number;
+    }[];
+    createdAt: string;
+    updatedAt: string;
+  }[];
+}
+
+// Storage Key: 'kanban_tasks'
+interface KanbanTasksStorage {
+  tasks: {
+    id: string;                    // Unique task ID (UUID)
+    title: string;                 // Task title
+    description: string;           // Task description
+    boardId: string;               // Board ID ('default')
+    column: string;                // Column ID ('new', 'inprogress', 'done')
+    position: number;              // Position in column
+    priority: 'low' | 'medium' | 'high';
+    tags: string[];                // Task tags
+
+    // Agent/Conversation linkage
+    sessionId?: string;            // Claude session ID (when assigned)
+    streamingId?: string;          // Streaming ID (when active)
+    agentStatus?: 'idle' | 'active' | 'paused' | 'waiting' | 'completed' | 'error';
+
+    // Timestamps
+    createdAt: string;             // ISO timestamp
+    updatedAt: string;             // ISO timestamp
+    assignedAt?: string;           // When assigned to agent
+    completedAt?: string;          // When completed
+
+    // Progress tracking
+    progress?: number;             // 0-100
+    statusMessage?: string;        // Current status message
+  }[];
+}
 ```
 
 ### TypeScript Interfaces
@@ -621,277 +646,231 @@ export interface TaskUpdateEvent {
 
 ---
 
-## Backend Implementation
+## Frontend Implementation
 
-### 1. KanbanService (`/src/services/kanban-service.ts`)
+### 1. LocalStorage Service (`/src/web/chat/services/kanban-storage.ts`)
 
 ```typescript
-import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
-import { createLogger } from './logger';
-import { CUIError } from './cui-error';
-import type {
-  KanbanBoard,
-  KanbanColumn,
-  KanbanTask,
-  KanbanTaskMetadata,
-  CreateTaskRequest,
-  MoveTaskRequest,
-  BulkTaskRequest
-} from '@/types';
+import type { KanbanBoard, KanbanTask } from '../types';
 
-const logger = createLogger('KanbanService');
+const STORAGE_KEYS = {
+  BOARDS: 'kanban_boards',
+  TASKS: 'kanban_tasks',
+} as const;
 
-export class KanbanService {
-  private db: Database.Database;
-
-  constructor(db: Database.Database) {
-    this.db = db;
-    this.initializeTables();
-  }
-
+export class KanbanStorageService {
   /**
-   * Initialize Kanban tables if they don't exist
+   * Get all boards from localStorage
    */
-  private initializeTables(): void {
-    // Extend sessions table with Kanban columns
-    const alterStatements = [
-      `ALTER TABLE sessions ADD COLUMN kanban_board_id TEXT DEFAULT 'default'`,
-      `ALTER TABLE sessions ADD COLUMN kanban_column TEXT DEFAULT NULL`,
-      `ALTER TABLE sessions ADD COLUMN kanban_position INTEGER DEFAULT NULL`,
-      `ALTER TABLE sessions ADD COLUMN priority TEXT DEFAULT 'medium'`,
-      `ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT '[]'`,
-      `ALTER TABLE sessions ADD COLUMN agent_status TEXT DEFAULT NULL`,
-      `ALTER TABLE sessions ADD COLUMN assigned_at TEXT DEFAULT NULL`,
-      `ALTER TABLE sessions ADD COLUMN completed_at TEXT DEFAULT NULL`,
-    ];
-
-    for (const stmt of alterStatements) {
-      try {
-        this.db.exec(stmt);
-      } catch (error: any) {
-        // Ignore "duplicate column" errors
-        if (!error.message.includes('duplicate column')) {
-          logger.error('Failed to alter sessions table', { error: error.message });
-        }
-      }
+  getBoards(): KanbanBoard[] {
+    const data = localStorage.getItem(STORAGE_KEYS.BOARDS);
+    if (!data) {
+      // Initialize with default board
+      const defaultBoard: KanbanBoard = {
+        id: 'default',
+        name: 'My Board',
+        columns: [
+          { id: 'new', name: 'New', position: 0 },
+          { id: 'inprogress', name: 'In Progress', position: 1 },
+          { id: 'done', name: 'Done', position: 2 },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      this.saveBoards([defaultBoard]);
+      return [defaultBoard];
     }
+    return JSON.parse(data);
+  }
 
-    // Create indexes
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_kanban_column
-      ON sessions(kanban_board_id, kanban_column, kanban_position)
-    `);
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_agent_status
-      ON sessions(agent_status)
-    `);
+  /**
+   * Save boards to localStorage
+   */
+  saveBoards(boards: KanbanBoard[]): void {
+    localStorage.setItem(STORAGE_KEYS.BOARDS, JSON.stringify(boards));
+  }
 
-    logger.info('Kanban tables initialized');
+  /**
+   * Get board by ID
+   */
+  getBoard(boardId: string): KanbanBoard | null {
+    const boards = this.getBoards();
+    return boards.find(b => b.id === boardId) || null;
+  }
+
+  /**
+   * Create new board
+   */
+  createBoard(name: string): KanbanBoard {
+    const boards = this.getBoards();
+    const newBoard: KanbanBoard = {
+      id: uuidv4(),
+      name,
+      columns: [
+        { id: 'new', name: 'New', position: 0 },
+        { id: 'inprogress', name: 'In Progress', position: 1 },
+        { id: 'done', name: 'Done', position: 2 },
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    boards.push(newBoard);
+    this.saveBoards(boards);
+    return newBoard;
   }
 
   // =========================================================================
-  // TASK CRUD OPERATIONS
+  // TASK OPERATIONS
   // =========================================================================
 
   /**
-   * Create a new task
+   * Get all tasks from localStorage
    */
-  createTask(request: CreateTaskRequest): KanbanTask {
-    const taskId = uuidv4();
-    const now = new Date().toISOString();
+  getTasks(boardId?: string): KanbanTask[] {
+    const data = localStorage.getItem(STORAGE_KEYS.TASKS);
+    if (!data) return [];
 
-    const insertStmt = this.db.prepare(`
-      INSERT INTO sessions (
-        session_id, custom_name, created_at, updated_at, version,
-        kanban_board_id, kanban_column, kanban_position, priority, tags
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const tasks: KanbanTask[] = JSON.parse(data);
+    return boardId ? tasks.filter(t => t.boardId === boardId) : tasks;
+  }
 
-    // Get next position in "new" column
-    const position = this.getNextPosition(request.boardId || 'default', 'new');
-
-    insertStmt.run(
-      taskId,
-      request.title,
-      now,
-      now,
-      1, // version
-      request.boardId || 'default',
-      'new',
-      position,
-      request.priority || 'medium',
-      JSON.stringify(request.tags || [])
-    );
-
-    logger.info('Task created', { taskId, title: request.title });
-
-    return this.getTask(taskId)!;
+  /**
+   * Save tasks to localStorage
+   */
+  private saveTasks(tasks: KanbanTask[]): void {
+    localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(tasks));
   }
 
   /**
    * Get task by ID
    */
   getTask(taskId: string): KanbanTask | null {
-    const stmt = this.db.prepare(`
-      SELECT * FROM sessions WHERE session_id = ?
-    `);
-    const row = stmt.get(taskId) as any;
+    const tasks = this.getTasks();
+    return tasks.find(t => t.id === taskId) || null;
+  }
 
-    if (!row) {
-      return null;
+  /**
+   * Create new task
+   */
+  createTask(request: {
+    title: string;
+    description: string;
+    priority?: 'low' | 'medium' | 'high';
+    tags?: string[];
+    boardId?: string;
+  }): KanbanTask {
+    const tasks = this.getTasks();
+    const boardId = request.boardId || 'default';
+
+    // Get next position in "new" column
+    const newTasks = tasks.filter(t => t.boardId === boardId && t.column === 'new');
+    const position = newTasks.length > 0
+      ? Math.max(...newTasks.map(t => t.position)) + 1
+      : 0;
+
+    const newTask: KanbanTask = {
+      id: uuidv4(),
+      title: request.title,
+      description: request.description,
+      boardId,
+      column: 'new',
+      position,
+      priority: request.priority || 'medium',
+      tags: request.tags || [],
+      agentStatus: 'idle',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    tasks.push(newTask);
+    this.saveTasks(tasks);
+    return newTask;
+  }
+
+  /**
+   * Update task
+   */
+  updateTask(taskId: string, updates: Partial<KanbanTask>): KanbanTask {
+    const tasks = this.getTasks();
+    const index = tasks.findIndex(t => t.id === taskId);
+
+    if (index === -1) {
+      throw new Error(`Task ${taskId} not found`);
     }
 
-    return this.mapRowToTask(row);
-  }
+    tasks[index] = {
+      ...tasks[index],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
 
-  /**
-   * Get all tasks in a board
-   */
-  getTasks(boardId: string = 'default'): KanbanTask[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM sessions
-      WHERE kanban_board_id = ?
-      ORDER BY kanban_position ASC
-    `);
-    const rows = stmt.all(boardId) as any[];
-
-    return rows.map(row => this.mapRowToTask(row));
-  }
-
-  /**
-   * Get tasks by column
-   */
-  getTasksByColumn(boardId: string, column: string): KanbanTask[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM sessions
-      WHERE kanban_board_id = ? AND kanban_column = ?
-      ORDER BY kanban_position ASC
-    `);
-    const rows = stmt.all(boardId, column) as any[];
-
-    return rows.map(row => this.mapRowToTask(row));
+    this.saveTasks(tasks);
+    return tasks[index];
   }
 
   /**
    * Move task to different column/position
    */
-  moveTask(request: MoveTaskRequest): KanbanTask {
-    const { taskId, targetColumn, targetPosition } = request;
+  moveTask(taskId: string, targetColumn: string, targetPosition: number): KanbanTask {
+    const tasks = this.getTasks();
+    const taskIndex = tasks.findIndex(t => t.id === taskId);
 
-    // Get current task
-    const task = this.getTask(taskId);
-    if (!task) {
-      throw new CUIError('Task not found', 'NOT_FOUND');
+    if (taskIndex === -1) {
+      throw new Error(`Task ${taskId} not found`);
     }
 
-    // Update task position
-    const updateStmt = this.db.prepare(`
-      UPDATE sessions
-      SET kanban_column = ?, kanban_position = ?, updated_at = ?
-      WHERE session_id = ?
-    `);
+    const task = tasks[taskIndex];
+    const oldColumn = task.column;
 
-    updateStmt.run(
-      targetColumn,
-      targetPosition,
-      new Date().toISOString(),
-      taskId
-    );
+    // Update task
+    task.column = targetColumn;
+    task.position = targetPosition;
+    task.updatedAt = new Date().toISOString();
 
-    // Reorder other tasks in target column
-    this.reorderColumn(task.kanban_board_id, targetColumn);
+    // Reorder other tasks
+    this.reorderColumn(tasks, task.boardId, oldColumn);
+    this.reorderColumn(tasks, task.boardId, targetColumn);
 
-    logger.info('Task moved', { taskId, targetColumn, targetPosition });
-
-    return this.getTask(taskId)!;
-  }
-
-  /**
-   * Update task metadata
-   */
-  updateTaskMetadata(taskId: string, metadata: Partial<KanbanTaskMetadata>): KanbanTask {
-    const updates: string[] = [];
-    const values: any[] = [];
-
-    if (metadata.priority) {
-      updates.push('priority = ?');
-      values.push(metadata.priority);
-    }
-    if (metadata.tags) {
-      updates.push('tags = ?');
-      values.push(JSON.stringify(metadata.tags));
-    }
-    if (metadata.agent_status) {
-      updates.push('agent_status = ?');
-      values.push(metadata.agent_status);
-    }
-    if (metadata.assigned_at) {
-      updates.push('assigned_at = ?');
-      values.push(metadata.assigned_at);
-    }
-    if (metadata.completed_at) {
-      updates.push('completed_at = ?');
-      values.push(metadata.completed_at);
-    }
-
-    if (updates.length === 0) {
-      throw new CUIError('No metadata to update', 'INVALID_REQUEST');
-    }
-
-    updates.push('updated_at = ?');
-    values.push(new Date().toISOString());
-    values.push(taskId);
-
-    const stmt = this.db.prepare(`
-      UPDATE sessions SET ${updates.join(', ')} WHERE session_id = ?
-    `);
-    stmt.run(...values);
-
-    logger.info('Task metadata updated', { taskId, metadata });
-
-    return this.getTask(taskId)!;
+    this.saveTasks(tasks);
+    return task;
   }
 
   /**
    * Delete task
    */
   deleteTask(taskId: string): boolean {
-    const stmt = this.db.prepare(`
-      DELETE FROM sessions WHERE session_id = ?
-    `);
-    const result = stmt.run(taskId);
+    const tasks = this.getTasks();
+    const filtered = tasks.filter(t => t.id !== taskId);
 
-    logger.info('Task deleted', { taskId, changes: result.changes });
+    if (filtered.length === tasks.length) {
+      return false; // Task not found
+    }
 
-    return result.changes > 0;
+    this.saveTasks(filtered);
+    return true;
   }
-
-  // =========================================================================
-  // BULK OPERATIONS
-  // =========================================================================
 
   /**
    * Bulk move tasks
    */
-  bulkMoveTasks(request: BulkTaskRequest): number {
-    if (request.operation !== 'move' || !request.targetColumn) {
-      throw new CUIError('Invalid bulk move request', 'INVALID_REQUEST');
-    }
-
+  bulkMoveTasks(taskIds: string[], targetColumn: string): number {
     let moved = 0;
-    for (const taskId of request.taskIds) {
+    for (const taskId of taskIds) {
       try {
-        const position = this.getNextPosition('default', request.targetColumn);
-        this.moveTask({ taskId, targetColumn: request.targetColumn, targetPosition: position });
-        moved++;
+        const tasks = this.getTasks();
+        const task = tasks.find(t => t.id === taskId);
+        if (task) {
+          const position = tasks.filter(
+            t => t.boardId === task.boardId && t.column === targetColumn
+          ).length;
+          this.moveTask(taskId, targetColumn, position);
+          moved++;
+        }
       } catch (error) {
-        logger.error('Failed to move task in bulk', { taskId, error });
+        console.error('Failed to move task:', taskId, error);
       }
     }
-
-    logger.info('Bulk move completed', { moved, total: request.taskIds.length });
-
     return moved;
   }
 
@@ -900,418 +879,210 @@ export class KanbanService {
   // =========================================================================
 
   /**
-   * Get next position in column
+   * Reorder tasks in column to fill gaps and maintain order
    */
-  private getNextPosition(boardId: string, column: string): number {
-    const stmt = this.db.prepare(`
-      SELECT MAX(kanban_position) as maxPos
-      FROM sessions
-      WHERE kanban_board_id = ? AND kanban_column = ?
-    `);
-    const result = stmt.get(boardId, column) as any;
+  private reorderColumn(tasks: KanbanTask[], boardId: string, column: string): void {
+    const columnTasks = tasks
+      .filter(t => t.boardId === boardId && t.column === column)
+      .sort((a, b) => a.position - b.position);
 
-    return (result?.maxPos ?? -1) + 1;
-  }
-
-  /**
-   * Reorder tasks in column to fill gaps
-   */
-  private reorderColumn(boardId: string, column: string): void {
-    const tasks = this.getTasksByColumn(boardId, column);
-
-    tasks.forEach((task, index) => {
-      if (task.kanban_position !== index) {
-        const stmt = this.db.prepare(`
-          UPDATE sessions SET kanban_position = ? WHERE session_id = ?
-        `);
-        stmt.run(index, task.id);
-      }
+    columnTasks.forEach((task, index) => {
+      task.position = index;
     });
   }
 
   /**
-   * Map database row to KanbanTask
+   * Clear all Kanban data (for testing/reset)
    */
-  private mapRowToTask(row: any): KanbanTask {
-    return {
-      id: row.session_id,
-      title: row.custom_name,
-      description: '', // Will be fetched from conversation context
-      kanban_board_id: row.kanban_board_id,
-      kanban_column: row.kanban_column,
-      kanban_position: row.kanban_position,
-      priority: row.priority as 'low' | 'medium' | 'high',
-      tags: JSON.parse(row.tags || '[]'),
-      agent_status: row.agent_status,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      assigned_at: row.assigned_at,
-      completed_at: row.completed_at,
-      pinned: Boolean(row.pinned),
-      archived: Boolean(row.archived),
-    };
+  clearAll(): void {
+    localStorage.removeItem(STORAGE_KEYS.BOARDS);
+    localStorage.removeItem(STORAGE_KEYS.TASKS);
   }
 }
+
+// Export singleton instance
+export const kanbanStorage = new KanbanStorageService();
 ```
 
-### 2. Kanban Routes (`/src/routes/kanban.routes.ts`)
-
-```typescript
-import { Router } from 'express';
-import type { Request, Response, NextFunction } from 'express';
-import { KanbanService } from '@/services/kanban-service';
-import { CUIError } from '@/services/cui-error';
-import { createLogger } from '@/services/logger';
-
-const logger = createLogger('KanbanRoutes');
-
-export function createKanbanRoutes(kanbanService: KanbanService): Router {
-  const router = Router();
-
-  // =========================================================================
-  // TASK ROUTES
-  // =========================================================================
-
-  /**
-   * Create new task
-   * POST /api/kanban/tasks
-   */
-  router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { title, description, priority, tags, workingDirectory, boardId } = req.body;
-
-      if (!title || !description) {
-        throw new CUIError('Title and description are required', 'INVALID_REQUEST');
-      }
-
-      const task = kanbanService.createTask({
-        title,
-        description,
-        priority: priority || 'medium',
-        tags: tags || [],
-        workingDirectory,
-        boardId: boardId || 'default',
-      });
-
-      logger.info('Task created via API', { taskId: task.id });
-
-      res.json({ success: true, task });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  /**
-   * Get all tasks
-   * GET /api/kanban/tasks
-   */
-  router.get('/tasks', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { boardId = 'default', column } = req.query;
-
-      const tasks = column
-        ? kanbanService.getTasksByColumn(boardId as string, column as string)
-        : kanbanService.getTasks(boardId as string);
-
-      res.json({ success: true, tasks });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  /**
-   * Get task by ID
-   * GET /api/kanban/tasks/:taskId
-   */
-  router.get('/tasks/:taskId', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { taskId } = req.params;
-
-      const task = kanbanService.getTask(taskId);
-      if (!task) {
-        throw new CUIError('Task not found', 'NOT_FOUND');
-      }
-
-      res.json({ success: true, task });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  /**
-   * Move task
-   * PUT /api/kanban/tasks/:taskId/move
-   */
-  router.put('/tasks/:taskId/move', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { taskId } = req.params;
-      const { targetColumn, targetPosition } = req.body;
-
-      if (!targetColumn || targetPosition === undefined) {
-        throw new CUIError('Target column and position are required', 'INVALID_REQUEST');
-      }
-
-      const task = kanbanService.moveTask({
-        taskId,
-        targetColumn,
-        targetPosition,
-      });
-
-      logger.info('Task moved via API', { taskId, targetColumn });
-
-      res.json({ success: true, task });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  /**
-   * Update task metadata
-   * PUT /api/kanban/tasks/:taskId/metadata
-   */
-  router.put('/tasks/:taskId/metadata', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { taskId } = req.params;
-      const metadata = req.body;
-
-      const task = kanbanService.updateTaskMetadata(taskId, metadata);
-
-      logger.info('Task metadata updated via API', { taskId });
-
-      res.json({ success: true, task });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  /**
-   * Delete task
-   * DELETE /api/kanban/tasks/:taskId
-   */
-  router.delete('/tasks/:taskId', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { taskId } = req.params;
-
-      const deleted = kanbanService.deleteTask(taskId);
-      if (!deleted) {
-        throw new CUIError('Task not found', 'NOT_FOUND');
-      }
-
-      logger.info('Task deleted via API', { taskId });
-
-      res.json({ success: true });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  /**
-   * Bulk operations
-   * POST /api/kanban/tasks/bulk
-   */
-  router.post('/tasks/bulk', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { taskIds, operation, targetColumn, metadata } = req.body;
-
-      if (!taskIds || !Array.isArray(taskIds) || taskIds.length === 0) {
-        throw new CUIError('Task IDs array is required', 'INVALID_REQUEST');
-      }
-
-      let result;
-      if (operation === 'move') {
-        result = kanbanService.bulkMoveTasks({ taskIds, operation, targetColumn });
-      } else {
-        throw new CUIError('Invalid bulk operation', 'INVALID_REQUEST');
-      }
-
-      res.json({ success: true, affected: result });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  return router;
-}
-```
-
-### 3. Integrate into CUIServer (`/src/cui-server.ts`)
-
-```typescript
-// Add to imports
-import { KanbanService } from './services/kanban-service';
-import { createKanbanRoutes } from './routes/kanban.routes';
-
-// Add to CUIServer class
-export class CUIServer {
-  // ... existing properties ...
-  private kanbanService!: KanbanService;
-
-  constructor(config: CUIServerConfig = {}) {
-    // ... existing code ...
-
-    // Initialize KanbanService (after sessionInfoService)
-    this.kanbanService = new KanbanService(this.sessionInfoService.getDatabase());
-    logger.info('KanbanService initialized');
-  }
-
-  private setupRoutes(): void {
-    // ... existing routes ...
-
-    // Kanban routes
-    this.app.use('/api/kanban', createKanbanRoutes(this.kanbanService));
-    logger.info('Kanban routes registered');
-  }
-}
-```
-
----
-
-## Frontend Implementation
-
-### 1. Kanban Context (`/src/web/chat/contexts/KanbanContext.tsx`)
+### 2. Kanban Context (`/src/web/chat/contexts/KanbanContext.tsx`)
 
 ```typescript
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { kanbanStorage } from '../services/kanban-storage';
 import { api } from '../services/api';
-import type { KanbanTask, KanbanColumnUI, KanbanBoardState } from '../types';
+import type { KanbanTask, KanbanBoard, KanbanColumn } from '../types';
 
-interface KanbanContextValue extends KanbanBoardState {
-  createTask: (title: string, description: string, priority?: string) => Promise<KanbanTask>;
+interface KanbanContextValue {
+  boards: KanbanBoard[];
+  activeBoard: KanbanBoard | null;
+  tasks: KanbanTask[];
+  loading: boolean;
+  error: string | null;
+
+  // Board operations
+  selectBoard: (boardId: string) => void;
+  createBoard: (name: string) => KanbanBoard;
+
+  // Task operations
+  createTask: (title: string, description: string, priority?: string) => KanbanTask;
   assignTaskToAgent: (taskId: string) => Promise<void>;
-  moveTask: (taskId: string, targetColumn: string, targetPosition: number) => Promise<void>;
-  updateTaskStatus: (taskId: string, status: string) => void;
-  refreshTasks: () => Promise<void>;
+  moveTask: (taskId: string, targetColumn: string, targetPosition: number) => void;
+  updateTask: (taskId: string, updates: Partial<KanbanTask>) => void;
+  deleteTask: (taskId: string) => void;
+  refreshTasks: () => void;
+
+  // Get tasks by column
+  getTasksByColumn: (columnId: string) => KanbanTask[];
 }
 
 const KanbanContext = createContext<KanbanContextValue | null>(null);
 
 export function KanbanProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<KanbanBoardState>({
-    boards: [],
-    activeBoard: null,
-    columns: [
-      { id: 'new', name: 'New', tasks: [], taskCount: 0 },
-      { id: 'inprogress', name: 'In Progress', tasks: [], taskCount: 0 },
-      { id: 'done', name: 'Done', tasks: [], taskCount: 0 },
-    ],
-    tasks: new Map(),
-    loading: false,
-    error: null,
-  });
+  const [boards, setBoards] = useState<KanbanBoard[]>([]);
+  const [activeBoard, setActiveBoard] = useState<KanbanBoard | null>(null);
+  const [tasks, setTasks] = useState<KanbanTask[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Fetch tasks from API
-  const refreshTasks = useCallback(async () => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
-
+  // Load boards and tasks from localStorage on mount
+  useEffect(() => {
     try {
-      const response = await api.getTasks();
-      const tasks = response.tasks;
+      setLoading(true);
+      const loadedBoards = kanbanStorage.getBoards();
+      setBoards(loadedBoards);
 
-      // Organize tasks by column
-      const columns = [
-        { id: 'new', name: 'New', tasks: [], taskCount: 0 },
-        { id: 'inprogress', name: 'In Progress', tasks: [], taskCount: 0 },
-        { id: 'done', name: 'Done', tasks: [], taskCount: 0 },
-      ];
-
-      const taskMap = new Map<string, KanbanTask>();
-
-      tasks.forEach((task: KanbanTask) => {
-        taskMap.set(task.id, task);
-        const column = columns.find(c => c.id === task.kanban_column);
-        if (column) {
-          column.tasks.push(task);
-          column.taskCount++;
-        }
-      });
-
-      // Sort tasks by position
-      columns.forEach(col => {
-        col.tasks.sort((a, b) => a.kanban_position - b.kanban_position);
-      });
-
-      setState(prev => ({
-        ...prev,
-        columns,
-        tasks: taskMap,
-        loading: false,
-      }));
-    } catch (error: any) {
-      setState(prev => ({
-        ...prev,
-        loading: false,
-        error: error.message || 'Failed to load tasks',
-      }));
+      // Select first board by default
+      if (loadedBoards.length > 0) {
+        setActiveBoard(loadedBoards[0]);
+        const loadedTasks = kanbanStorage.getTasks(loadedBoards[0].id);
+        setTasks(loadedTasks);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to load Kanban data');
+    } finally {
+      setLoading(false);
     }
   }, []);
 
-  // Create new task
-  const createTask = useCallback(async (
+  // Select board
+  const selectBoard = useCallback((boardId: string) => {
+    const board = kanbanStorage.getBoard(boardId);
+    if (board) {
+      setActiveBoard(board);
+      const boardTasks = kanbanStorage.getTasks(boardId);
+      setTasks(boardTasks);
+    }
+  }, []);
+
+  // Create board
+  const createBoard = useCallback((name: string): KanbanBoard => {
+    const newBoard = kanbanStorage.createBoard(name);
+    setBoards(prev => [...prev, newBoard]);
+    return newBoard;
+  }, []);
+
+  // Create task
+  const createTask = useCallback((
     title: string,
     description: string,
     priority: string = 'medium'
-  ): Promise<KanbanTask> => {
-    const response = await api.createTask({ title, description, priority });
-    await refreshTasks();
-    return response.task;
-  }, [refreshTasks]);
+  ): KanbanTask => {
+    if (!activeBoard) {
+      throw new Error('No active board selected');
+    }
 
-  // Assign task to agent
-  const assignTaskToAgent = useCallback(async (taskId: string) => {
-    const task = state.tasks.get(taskId);
-    if (!task) throw new Error('Task not found');
-
-    // Start conversation with task description
-    await api.startConversation({
-      workingDirectory: task.workingDirectory || process.cwd(),
-      initialPrompt: `${task.title}\n\n${task.description}`,
-      kanbanMetadata: {
-        taskId: task.id,
-        priority: task.priority,
-      },
+    const newTask = kanbanStorage.createTask({
+      title,
+      description,
+      priority: priority as 'low' | 'medium' | 'high',
+      boardId: activeBoard.id,
     });
 
-    // Move to "In Progress"
-    await api.moveTask(taskId, 'inprogress', 0);
-    await refreshTasks();
-  }, [state.tasks, refreshTasks]);
+    setTasks(prev => [...prev, newTask]);
+    return newTask;
+  }, [activeBoard]);
+
+  // Assign task to agent (uses existing conversation API)
+  const assignTaskToAgent = useCallback(async (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) throw new Error('Task not found');
+
+    try {
+      // Call existing conversation API to start agent
+      const response = await api.startConversation({
+        workingDirectory: process.cwd(),
+        initialPrompt: `${task.title}\n\n${task.description}`,
+      });
+
+      // Update task in localStorage with conversation details
+      const updatedTask = kanbanStorage.updateTask(taskId, {
+        sessionId: response.sessionId,
+        streamingId: response.streamingId,
+        column: 'inprogress',
+        agentStatus: 'active',
+        assignedAt: new Date().toISOString(),
+      });
+
+      // Update state
+      setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+    } catch (err: any) {
+      setError(err.message || 'Failed to assign task to agent');
+      throw err;
+    }
+  }, [tasks]);
 
   // Move task
-  const moveTask = useCallback(async (
+  const moveTask = useCallback((
     taskId: string,
     targetColumn: string,
     targetPosition: number
   ) => {
-    await api.moveTask(taskId, targetColumn, targetPosition);
-    await refreshTasks();
-  }, [refreshTasks]);
+    const updatedTask = kanbanStorage.moveTask(taskId, targetColumn, targetPosition);
+    setTasks(kanbanStorage.getTasks(activeBoard?.id));
+  }, [activeBoard]);
 
-  // Update task status (from SSE events)
-  const updateTaskStatus = useCallback((taskId: string, status: string) => {
-    setState(prev => {
-      const task = prev.tasks.get(taskId);
-      if (!task) return prev;
-
-      const updatedTask = { ...task, agentStatus: status };
-      const newTasks = new Map(prev.tasks);
-      newTasks.set(taskId, updatedTask);
-
-      return { ...prev, tasks: newTasks };
-    });
+  // Update task
+  const updateTask = useCallback((taskId: string, updates: Partial<KanbanTask>) => {
+    const updatedTask = kanbanStorage.updateTask(taskId, updates);
+    setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
   }, []);
 
-  // Load tasks on mount
-  useEffect(() => {
-    refreshTasks();
-  }, [refreshTasks]);
+  // Delete task
+  const deleteTask = useCallback((taskId: string) => {
+    kanbanStorage.deleteTask(taskId);
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+  }, []);
+
+  // Refresh tasks (reload from localStorage)
+  const refreshTasks = useCallback(() => {
+    if (activeBoard) {
+      const loadedTasks = kanbanStorage.getTasks(activeBoard.id);
+      setTasks(loadedTasks);
+    }
+  }, [activeBoard]);
+
+  // Get tasks by column
+  const getTasksByColumn = useCallback((columnId: string): KanbanTask[] => {
+    return tasks
+      .filter(t => t.column === columnId)
+      .sort((a, b) => a.position - b.position);
+  }, [tasks]);
 
   const value: KanbanContextValue = {
-    ...state,
+    boards,
+    activeBoard,
+    tasks,
+    loading,
+    error,
+    selectBoard,
+    createBoard,
     createTask,
     assignTaskToAgent,
     moveTask,
-    updateTaskStatus,
+    updateTask,
+    deleteTask,
     refreshTasks,
+    getTasksByColumn,
   };
 
   return <KanbanContext.Provider value={value}>{children}</KanbanContext.Provider>;
@@ -1635,87 +1406,109 @@ useEffect(() => {
 
 ## Implementation Phases
 
-### Phase 1: Foundation (Week 1)
+### Phase 1: LocalStorage Foundation (3-5 days)
 
-**Goal**: Basic Kanban board with task CRUD
+**Goal**: Basic localStorage service and Kanban data structure
 
-- [ ] Extend SQLite schema with Kanban columns
-- [ ] Create KanbanService with basic operations
-- [ ] Create Kanban API routes
-- [ ] Create frontend Kanban types
-- [ ] Create KanbanContext for state management
-- [ ] Build basic KanbanBoard component (no drag-drop yet)
+- [ ] Create KanbanStorageService class (localStorage wrapper)
+- [ ] Define TypeScript interfaces for Kanban data
+- [ ] Implement board and task CRUD operations
+- [ ] Create KanbanContext for React state management
+- [ ] Build basic KanbanBoard component layout
 - [ ] Build TaskCard component
 - [ ] Build CreateTaskDialog component
+- [ ] Test data persistence in localStorage
 
 **Deliverables:**
+- localStorage service working with basic CRUD
 - Users can create tasks
 - Tasks appear in "New" column
-- Tasks can be clicked to view details
+- Tasks persist across browser sessions
+- Basic board UI renders correctly
 
-### Phase 2: Agent Integration (Week 2)
+### Phase 2: Agent Integration (3-5 days)
 
-**Goal**: Assign tasks to agents and monitor progress
+**Goal**: Connect tasks to existing conversation API
 
 - [ ] Build AssignTaskDialog component
-- [ ] Integrate with ClaudeProcessManager
-- [ ] Link tasks to conversations (sessionId)
-- [ ] Update ConversationStatusManager for task tracking
-- [ ] Implement task status updates via SSE
-- [ ] Build background execution support
-- [ ] Add status indicators (active, paused, completed)
+- [ ] Integrate with existing `/api/conversations/start` endpoint
+- [ ] Link tasks to conversation sessionIds and streamingIds
+- [ ] Subscribe to existing SSE streams for task updates
+- [ ] Update localStorage when agent status changes
+- [ ] Add status indicators (idle, active, waiting, completed, error)
+- [ ] Handle agent completion events
 
 **Deliverables:**
 - Users can assign tasks to agents
 - Tasks move to "In Progress" when assigned
-- Real-time status updates
-- Background execution works
+- Real-time status updates via existing SSE
+- Background execution works (existing feature)
+- Tasks sync with localStorage automatically
 
-### Phase 3: Advanced Features (Week 3)
+### Phase 3: Advanced Features (3-5 days)
 
 **Goal**: Drag-drop, filtering, and enhancements
 
 - [ ] Install @dnd-kit for drag-and-drop
-- [ ] Implement drag-drop reordering
+- [ ] Implement drag-drop reordering between columns
 - [ ] Add task filtering (priority, tags, status)
-- [ ] Add task search
-- [ ] Add bulk operations (assign multiple, move multiple)
-- [ ] Add task priority visualization
-- [ ] Add progress indicators (% complete)
+- [ ] Add task search functionality
+- [ ] Add bulk operations (move multiple tasks)
+- [ ] Add task priority visualization (colors)
+- [ ] Add progress indicators (based on tool executions)
 - [ ] Desktop notifications for task completion
+- [ ] Performance optimization (memoization, virtualization)
 
 **Deliverables:**
 - Full drag-and-drop Kanban board
 - Advanced filtering and search
 - Polished UI/UX
+- Smooth animations and transitions
 
 ---
 
 ## Success Criteria
 
+✅ **localStorage persists all Kanban data**
+✅ **No backend changes required**
 ✅ **User can create tasks on Kanban board**
-✅ **User can assign tasks to Claude agents**
+✅ **User can assign tasks to Claude agents (via existing API)**
 ✅ **Confirmation dialog shows task details before assignment**
-✅ **Tasks can be assigned from Kanban board OR chat**
-✅ **Agents work in background when chat is closed**
-✅ **Real-time status updates across all views**
+✅ **Tasks automatically move between columns**
+✅ **Real-time status updates via existing SSE**
 ✅ **User can click task to view chat conversation**
-✅ **Tasks automatically move between columns based on status**
 ✅ **System handles multiple concurrent agent tasks**
 ✅ **Full integration with existing conversation system**
+✅ **Data persists across browser sessions**
 
 ---
 
 ## Next Steps
 
-1. **Review this plan** with your team
-2. **Set up development environment**
-3. **Start with Phase 1**: Database schema + KanbanService
-4. **Test backend APIs** with Postman/curl
-5. **Build frontend components** incrementally
-6. **Integrate with existing chat system**
-7. **Add real-time updates**
-8. **Polish UI/UX**
+1. **Review this plan**
+2. **Start with Phase 1**: Create localStorage service
+   - Implement KanbanStorageService
+   - Define TypeScript types
+   - Test localStorage operations
+
+3. **Build UI components**:
+   - KanbanBoard, KanbanColumn, TaskCard
+   - CreateTaskDialog, AssignTaskDialog
+
+4. **Integrate with existing APIs**:
+   - Use existing conversation endpoints
+   - Subscribe to existing SSE streams
+   - Update localStorage based on agent events
+
+5. **Add advanced features**:
+   - Drag-and-drop
+   - Filtering and search
+   - Notifications
+
+6. **Test and polish**:
+   - Cross-browser testing
+   - Performance optimization
+   - UI/UX refinement
 
 ---
 

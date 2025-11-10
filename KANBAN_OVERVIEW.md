@@ -229,27 +229,27 @@
         └───────────────┬───────────────┘
                         │
 ┌─────────────────────────────────────────────────────────────┐
-│                   CUI SERVER (Backend)                      │
+│              FRONTEND (Browser - React)                     │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  KanbanService                                        │  │
-│  │  - Creates task in database                          │  │
-│  │  - Tracks task status (new → inprogress → done)      │  │
-│  │  - Links task to agent conversation                  │  │
+│  │  LocalStorage (Browser Storage)                      │  │
+│  │  - Stores Kanban boards & tasks                      │  │
+│  │  - Persists task status (new → inprogress → done)    │  │
+│  │  - Links tasks to agent conversations                │  │
 │  └────────────────────┬─────────────────────────────────┘  │
 │                       │                                     │
 │  ┌────────────────────┴─────────────────────────────────┐  │
-│  │  ProcessManager                                       │  │
-│  │  - Starts Claude agent                                │  │
-│  │  - Monitors agent activity                            │  │
-│  │  - Updates task status automatically                  │  │
+│  │  KanbanContext (React State)                         │  │
+│  │  - Manages Kanban state                              │  │
+│  │  - Handles drag & drop                               │  │
+│  │  - Syncs with localStorage                           │  │
 │  └────────────────────┬─────────────────────────────────┘  │
 │                       │                                     │
 │  ┌────────────────────┴─────────────────────────────────┐  │
-│  │  StreamManager                                        │  │
-│  │  - Broadcasts real-time updates                       │  │
-│  │  - Sends progress to your browser                     │  │
-│  │  - Updates Kanban board live                          │  │
+│  │  Existing CUI Server Integration                     │  │
+│  │  - Starts Claude agent (existing API)                │  │
+│  │  - Monitors agent via SSE (existing)                 │  │
+│  │  - Updates task status in localStorage               │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                         │
@@ -276,17 +276,18 @@
 ```
 1. You fill form on Kanban board
          ↓
-2. Frontend sends: POST /api/kanban/tasks
+2. Frontend creates task in localStorage:
    {
+     id: "task_abc123",
      title: "Build REST API",
      description: "Create auth endpoints",
-     priority: "high"
+     priority: "high",
+     column: "new",
+     position: 0,
+     sessionId: null
    }
          ↓
-3. Backend creates task in SQLite database
-   session_id = "abc123"
-   kanban_column = "new"
-   kanban_position = 0
+3. localStorage.setItem('kanban_tasks', JSON.stringify(tasks))
          ↓
 4. Task card appears in "NEW" column
          ↓
@@ -296,38 +297,40 @@
          ↓
 7. You confirm
          ↓
-8. Frontend sends: POST /api/conversations/start
+8. Frontend calls existing API: POST /api/conversations/start
    {
      initialPrompt: "Build REST API\n\nCreate auth endpoints",
-     workingDirectory: "/project/backend",
-     taskId: "abc123"
+     workingDirectory: "/project/backend"
    }
          ↓
-9. Backend starts Claude agent as child process
+9. Backend starts Claude agent (existing functionality)
+   Returns: { streamingId, sessionId }
          ↓
-10. Backend updates database:
-    kanban_column = "inprogress"
-    agent_status = "active"
+10. Frontend updates localStorage:
+    task.sessionId = sessionId
+    task.streamingId = streamingId
+    task.column = "inprogress"
+    task.status = "active"
          ↓
 11. Task card moves to "IN PROGRESS" column
          ↓
-12. Agent starts working, streaming output
+12. Agent starts working, streaming output (existing SSE)
          ↓
-13. Backend sends SSE events to your browser:
+13. Frontend receives SSE events (existing):
     - text: Agent's thinking
     - tool_use: Agent using tools
     - progress: % complete
          ↓
-14. Your Kanban board updates in real-time:
-    "Progress: 35%"
-    "Agent: Writing code..."
+14. Frontend updates localStorage + UI in real-time:
+    task.progress = 35
+    task.statusMessage = "Writing code..."
          ↓
 15. Agent completes task
          ↓
-16. Backend updates database:
-    kanban_column = "done"
-    agent_status = "completed"
-    completed_at = "2024-01-15T10:30:00Z"
+16. Frontend updates localStorage:
+    task.column = "done"
+    task.status = "completed"
+    task.completedAt = new Date().toISOString()
          ↓
 17. Task card moves to "DONE" column
          ↓
@@ -418,20 +421,20 @@
 
 ## 📅 Implementation Timeline
 
-### Week 1: Database + Backend
-- Day 1-2: Extend SQLite schema, create KanbanService
-- Day 3-4: Build API routes, integrate with CUIServer
-- Day 5: Testing backend with Postman
+### Week 1: Frontend Foundation
+- Day 1-2: Create localStorage service, KanbanContext
+- Day 3-4: Build basic board layout with TaskCard components
+- Day 5: Test data persistence in localStorage
 
-### Week 2: Frontend + Integration
-- Day 1-2: Create KanbanContext, basic board layout
-- Day 3-4: Build TaskCard, dialogs, agent assignment
+### Week 2: Integration + Features
+- Day 1-2: Integrate with existing chat/conversation API
+- Day 3-4: Implement agent assignment and real-time updates
 - Day 5: Test end-to-end flow
 
 ### Week 3: Polish + Advanced Features
 - Day 1-2: Drag-and-drop, filtering, search
-- Day 3-4: Real-time updates, background execution
-- Day 5: Desktop notifications, bulk operations
+- Day 3-4: Desktop notifications, bulk operations
+- Day 5: Performance optimization and final testing
 
 ---
 
@@ -442,18 +445,25 @@
    - `KANBAN_INTEGRATION_ANALYSIS.md` (architecture deep dive)
    - `KANBAN_IMPLEMENTATION_CHECKLIST.md` (step-by-step tasks)
 
-2. **Start with Phase 1**: Extend database schema
-   - Run migration to add Kanban columns
-   - Create KanbanService class
-   - Build API routes
+2. **Start with Phase 1**: Create localStorage service
+   - Build localStorage storage layer
+   - Create KanbanContext for state management
+   - Define TypeScript interfaces
 
-3. **Test backend** before building UI
+3. **Build UI components**:
+   - KanbanBoard, KanbanColumn, TaskCard
+   - Create/Edit task dialogs
+   - Drag-and-drop functionality
 
-4. **Build frontend** components incrementally
+4. **Integrate** with existing chat system:
+   - Use existing `/api/conversations/start` endpoint
+   - Subscribe to existing SSE streams
+   - Update localStorage based on agent status
 
-5. **Integrate** with existing chat system
-
-6. **Polish** UI/UX and add real-time updates
+5. **Polish** UI/UX and add features:
+   - Filtering, search, bulk operations
+   - Desktop notifications
+   - Performance optimization
 
 ---
 
