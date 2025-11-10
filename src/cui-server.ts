@@ -103,7 +103,7 @@ export class CUIServer {
     this.statusTracker = this.conversationStatusManager; // Use the same instance for backward compatibility
     this.toolMetricsService = new ToolMetricsService();
     this.fileSystemService = new FileSystemService();
-    this.processManager = new ClaudeProcessManager(this.historyReader, this.statusTracker, undefined, undefined, this.toolMetricsService, this.sessionInfoService, this.fileSystemService);
+    this.processManager = new ClaudeProcessManager(this.historyReader, this.statusTracker, "C:\\Users\\Varun israni\\AppData\\Roaming\\npm\\claude.cmd", undefined, this.toolMetricsService, this.sessionInfoService, this.fileSystemService);
     this.streamManager = new StreamManager();
     this.permissionTracker = new PermissionTracker();
     this.mcpConfigGenerator = new MCPConfigGenerator(this.fileSystemService);
