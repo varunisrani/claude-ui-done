@@ -9,16 +9,16 @@ import { TaskList } from './TaskList';
 
 export function Home() {
   const navigate = useNavigate();
-  const { 
-    conversations, 
-    loading, 
-    loadingMore, 
-    hasMore, 
-    error, 
-    loadConversations, 
+  const {
+    conversations,
+    loading,
+    loadingMore,
+    hasMore,
+    error,
+    loadConversations,
     loadMoreConversations,
     recentDirectories,
-    getMostRecentWorkingDirectory 
+    getMostRecentWorkingDirectory
   } = useConversations();
   const [activeTab, setActiveTab] = useState<'tasks' | 'history' | 'archive'>('tasks');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -152,7 +152,7 @@ export function Home() {
               </div>
               
               <div className="w-full">
-                <Composer 
+                <Composer
                   ref={composerRef}
                   workingDirectory={recentWorkingDirectory}
                   onSubmit={handleComposerSubmit}

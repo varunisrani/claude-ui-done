@@ -7,6 +7,7 @@ import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import type { PermissionRequest, Command } from '../../types';
+import type { KanbanTask } from '../../types/kanban';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAudioRecording } from '../../hooks/useAudioRecording';
 import { api } from '../../../chat/services/api';
@@ -68,6 +69,11 @@ export interface ComposerProps {
   // Command autocomplete
   availableCommands?: Command[];
   onFetchCommands?: (workingDirectory?: string) => Promise<Command[]>;
+
+  // Kanban task creation
+  enableKanbanTaskCreation?: boolean;
+  onTaskCreated?: (task: KanbanTask, sessionId?: string) => void;
+  kanbanDefaultPriority?: 'low' | 'medium' | 'high';
 }
 
 export interface ComposerRef {
@@ -319,6 +325,9 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   onFetchFileSystem,
   availableCommands = [],
   onFetchCommands,
+  enableKanbanTaskCreation = false,
+  onTaskCreated,
+  kanbanDefaultPriority = 'medium',
 }: ComposerProps, ref: React.Ref<ComposerRef>) {
   // Load cached state
   const [cachedState, setCachedState] = useLocalStorage<ComposerCache>('cui-composer', {
@@ -350,6 +359,14 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     focusedIndex: -1,
     type: 'file',
   });
+
+  // Kanban task creation state
+  const [isKanbanMode, setIsKanbanMode] = useState(false);
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskDescription, setTaskDescription] = useState('');
+  const [taskPriority, setTaskPriority] = useState<'low' | 'medium' | 'high'>(kanbanDefaultPriority);
+  const [taskTags, setTaskTags] = useState('');
+  const [isCreatingTask, setIsCreatingTask] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
   
@@ -669,20 +686,52 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   };
 
   const handleSubmit = (permissionMode: string) => {
-    const trimmedValue = value.trim();
-    if (!trimmedValue || isLoading) return;
+    if (isKanbanMode) {
+      // Handle Kanban task creation
+      const trimmedTitle = taskTitle.trim();
+      const trimmedDescription = taskDescription.trim();
 
-    // For Home usage with directory/model
-    if (showDirectorySelector && selectedDirectory === 'Select directory') return;
+      if (!trimmedTitle || !trimmedDescription || isCreatingTask) return;
 
-    onSubmit(
-      trimmedValue,
-      showDirectorySelector ? selectedDirectory : undefined,
-      showModelSelector ? selectedModel : undefined,
-      permissionMode
-    );
-    
-    setValue('');
+      // For Home usage with directory/model
+      if (showDirectorySelector && selectedDirectory === 'Select directory') return;
+
+      // Create task object
+      const taskData = {
+        title: trimmedTitle,
+        description: trimmedDescription,
+        priority: taskPriority,
+        tags: taskTags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0),
+        workingDirectory: showDirectorySelector ? selectedDirectory : undefined,
+      };
+
+      // Call the task creation callback
+      onTaskCreated?.(taskData as KanbanTask, undefined);
+
+      // Reset form
+      setTaskTitle('');
+      setTaskDescription('');
+      setTaskTags('');
+      setTaskPriority(kanbanDefaultPriority);
+      setIsCreatingTask(false);
+    } else {
+      // Handle regular chat submission
+      const trimmedValue = value.trim();
+      if (!trimmedValue || isLoading) return;
+
+      // For Home usage with directory/model
+      if (showDirectorySelector && selectedDirectory === 'Select directory') return;
+
+      onSubmit(
+        trimmedValue,
+        showDirectorySelector ? selectedDirectory : undefined,
+        showModelSelector ? selectedModel : undefined,
+        permissionMode
+      );
+
+      setValue('');
+    }
+
     resetAutocomplete();
   };
 
@@ -866,7 +915,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               <Textarea
                 ref={textareaRef}
                 className="min-h-[80px] max-h-[80vh] pt-4 pr-[60px] pb-[50px] border-none bg-transparent text-foreground font-sans text-base leading-relaxed resize-none outline-none overflow-y-auto scrollbar-thin ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                placeholder={permissionRequest && showPermissionUI ? "Deny and tell Claude what to do" : placeholder}
+                placeholder={permissionRequest && showPermissionUI ? "Deny and tell Claude what to do" : (isKanbanMode ? "Type your message here, or click 'Create Kanban Task Instead'..." : placeholder)}
                 value={value}
                 onChange={handleTextChange}
                 onKeyDown={handleKeyDown}
@@ -1046,10 +1095,14 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                         <Button
                           type="button"
                           className="h-8 min-w-[48px] w-[48px] px-3 py-0.5 bg-transparent text-inherit hover:bg-white/10 border-0 shadow-none"
-                          disabled={!value.trim() || isLoading || disabled || (showDirectorySelector && selectedDirectory === 'Select directory')}
+                          disabled={
+                            isKanbanMode
+                              ? (!taskTitle.trim() || !taskDescription.trim() || isLoading || disabled || (showDirectorySelector && selectedDirectory === 'Select directory'))
+                              : (!value.trim() || isLoading || disabled || (showDirectorySelector && selectedDirectory === 'Select directory'))
+                          }
                           onClick={() => handleSubmit(selectedPermissionMode)}
                         >
-                          {isLoading ? <Loader2 size={14} className="animate-spin" /> : getPermissionModeLabel(selectedPermissionMode)}
+                          {isLoading ? <Loader2 size={14} className="animate-spin" /> : (isKanbanMode ? 'Create Task' : getPermissionModeLabel(selectedPermissionMode))}
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
@@ -1098,7 +1151,108 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
           </div>
         </div>
       </div>
-      
+  
+      {/* Kanban Task Creation UI */}
+      {enableKanbanTaskCreation && isKanbanMode && (
+        <div className="border-t border-border bg-muted/30 p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-foreground">Create Kanban Task</h3>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsKanbanMode(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X size={16} />
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4">
+            {/* Task Title */}
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-2">
+                Task Title *
+              </label>
+              <input
+                type="text"
+                value={taskTitle}
+                onChange={(e) => setTaskTitle(e.target.value)}
+                placeholder="Enter task title..."
+                className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                disabled={isCreatingTask}
+              />
+            </div>
+
+            {/* Task Description */}
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-2">
+                Description *
+              </label>
+              <textarea
+                value={taskDescription}
+                onChange={(e) => setTaskDescription(e.target.value)}
+                placeholder="Describe what needs to be done..."
+                rows={3}
+                className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
+                disabled={isCreatingTask}
+              />
+            </div>
+
+            {/* Priority and Tags */}
+            <div className="grid grid-cols-2 gap-4">
+              {/* Priority */}
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-2">
+                  Priority
+                </label>
+                <select
+                  value={taskPriority}
+                  onChange={(e) => setTaskPriority(e.target.value as 'low' | 'medium' | 'high')}
+                  className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  disabled={isCreatingTask}
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+
+              {/* Tags */}
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-2">
+                  Tags (comma-separated)
+                </label>
+                <input
+                  type="text"
+                  value={taskTags}
+                  onChange={(e) => setTaskTags(e.target.value)}
+                  placeholder="bug, feature, urgent..."
+                  className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  disabled={isCreatingTask}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Kanban Mode Toggle */}
+      {enableKanbanTaskCreation && !isKanbanMode && (
+        <div className="border-t border-border p-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setIsKanbanMode(true)}
+            className="w-full justify-start text-muted-foreground hover:text-foreground"
+          >
+            <Rocket size={16} className="mr-2" />
+            Create Kanban Task Instead
+          </Button>
+        </div>
+      )}
+
       {/* Autocomplete Dropdown */}
       {(enableFileAutocomplete || onFetchCommands) && (
         <AutocompleteDropdown

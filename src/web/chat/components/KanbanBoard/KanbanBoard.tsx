@@ -30,8 +30,9 @@ import { TaskFilters } from './TaskFilters';
 import { TaskSearch } from './TaskSearch';
 import { KanbanSettings } from './KanbanSettings';
 import { TaskCard } from './TaskCard';
+import { BackgroundTaskMonitor } from './BackgroundTaskMonitor';
 import { Button } from '../ui/button';
-import { Settings, Download, Upload } from 'lucide-react';
+import { Settings, Download, Upload, Bot, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import type { KanbanTask } from '../../types/kanban';
 
 export function KanbanBoard() {
@@ -65,6 +66,9 @@ export function KanbanBoard() {
 
   // Settings preferences
   const [showCompletedTasks, setShowCompletedTasks] = useState(true);
+
+  // Background monitor visibility
+  const [showBackgroundMonitor, setShowBackgroundMonitor] = useState(false);
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -341,6 +345,17 @@ export function KanbanBoard() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBackgroundMonitor(!showBackgroundMonitor)}
+                className={showBackgroundMonitor ? 'bg-blue-50 border-blue-200' : ''}
+              >
+                {showBackgroundMonitor ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
+                <span className="ml-2 hidden sm:inline">
+                  {showBackgroundMonitor ? 'Hide Monitor' : 'Background Tasks'}
+                </span>
+              </Button>
               <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
                 <Settings className="w-4 h-4" />
               </Button>
@@ -408,34 +423,46 @@ export function KanbanBoard() {
           )}
         </div>
 
-        {/* Kanban Columns */}
-        <div className="flex-1 overflow-x-auto p-6">
-          <div className="flex gap-6 h-full min-w-max">
-            {activeBoard.columns
-              .sort((a, b) => a.position - b.position)
-              .map(column => {
-                const columnTasks = filteredTasks.filter(t => t.column === column.id);
-                return (
-                  <SortableContext
-                    key={column.id}
-                    id={column.id}
-                    items={columnTasks.map(t => t.id)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    <KanbanColumn
+        {/* Main Content Area */}
+        <div className={`flex-1 flex ${showBackgroundMonitor ? 'gap-6' : ''} overflow-hidden`}>
+          {/* Kanban Columns */}
+          <div className={`${showBackgroundMonitor ? 'flex-1' : 'w-full'} overflow-x-auto p-6`}>
+            <div className="flex gap-6 h-full min-w-max">
+              {activeBoard.columns
+                .sort((a, b) => a.position - b.position)
+                .map(column => {
+                  const columnTasks = filteredTasks.filter(t => t.column === column.id);
+                  return (
+                    <SortableContext
+                      key={column.id}
                       id={column.id}
-                      name={column.name}
-                      tasks={columnTasks}
-                      onTaskClick={handleTaskClick}
-                      onAssignClick={handleAssignClick}
-                      onDoneClick={handleDoneClick}
-                      selectedTaskIds={selectedTaskIds}
-                      onSelectTask={handleSelectTask}
-                    />
-                  </SortableContext>
-                );
-              })}
+                      items={columnTasks.map(t => t.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <KanbanColumn
+                        id={column.id}
+                        name={column.name}
+                        tasks={columnTasks}
+                        onTaskClick={handleTaskClick}
+                        onAssignClick={handleAssignClick}
+                        onDoneClick={handleDoneClick}
+                        selectedTaskIds={selectedTaskIds}
+                        onSelectTask={handleSelectTask}
+                      />
+                    </SortableContext>
+                  );
+                })}
+            </div>
           </div>
+
+          {/* Background Task Monitor Sidebar */}
+          {showBackgroundMonitor && (
+            <div className="w-96 border-l border-gray-200 bg-gray-50/50 overflow-y-auto">
+              <div className="p-4">
+                <BackgroundTaskMonitor />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Drag Overlay */}

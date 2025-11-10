@@ -10,6 +10,21 @@ import { kanbanStorage } from '../services/kanban-storage';
 import { api } from '../services/api';
 import type { KanbanTask, KanbanBoard, CreateTaskRequest } from '../types/kanban';
 
+/**
+ * Deduplicate tasks array by ID, keeping the first occurrence of each task
+ */
+function deduplicateTasks(tasks: KanbanTask[]): KanbanTask[] {
+  const seen = new Set<string>();
+  return tasks.filter(task => {
+    if (seen.has(task.id)) {
+      console.warn('⚠️ [KanbanContext] Removing duplicate task:', task.id);
+      return false;
+    }
+    seen.add(task.id);
+    return true;
+  });
+}
+
 interface KanbanContextValue {
   boards: KanbanBoard[];
   activeBoard: KanbanBoard | null;
@@ -31,6 +46,11 @@ interface KanbanContextValue {
   refreshTasks: () => void;
   syncTask: (taskId: string) => void;
   validateAndSyncTasks: () => void;
+
+  // Background task operations
+  getBackgroundTasks: () => KanbanTask[];
+  monitorBackgroundTask: (sessionId: string) => Promise<void>;
+  stopBackgroundMonitoring: (sessionId: string) => void;
 
   // Get tasks by column
   getTasksByColumn: (columnId: string) => KanbanTask[];
@@ -56,7 +76,8 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
       if (loadedBoards.length > 0) {
         setActiveBoard(loadedBoards[0]);
         const loadedTasks = kanbanStorage.getTasks(loadedBoards[0].id);
-        setTasks(loadedTasks);
+        const deduplicatedTasks = deduplicateTasks(loadedTasks);
+        setTasks(deduplicatedTasks);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load Kanban data');
@@ -71,7 +92,8 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
     if (board) {
       setActiveBoard(board);
       const boardTasks = kanbanStorage.getTasks(boardId);
-      setTasks(boardTasks);
+      const deduplicatedTasks = deduplicateTasks(boardTasks);
+      setTasks(deduplicatedTasks);
     }
   }, []);
 
@@ -93,10 +115,19 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
       boardId: activeBoard.id,
     });
 
-    setTasks(prev => [...prev, newTask]);
+    setTasks(prev => {
+      // Ensure no duplicates by checking IDs
+      const existingIds = new Set(prev.map(t => t.id));
+      if (existingIds.has(newTask.id)) {
+        console.warn('⚠️ [KanbanContext] Task ID already exists, skipping add:', newTask.id);
+        return prev;
+      }
+      return [...prev, newTask];
+    });
     return newTask;
   }, [activeBoard]);
 
+  
   // Assign task to agent (uses existing conversation API)
   const assignTaskToAgent = useCallback(async (taskId: string): Promise<string> => {
     console.log('🎯 [KanbanContext] assignTaskToAgent called with task ID:', taskId);
@@ -120,13 +151,9 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
     const conversationPayload = {
       workingDirectory: task.workingDirectory || process.cwd(),
       initialPrompt: `${task.title}\n\n${task.description}`,
+      model: task.model === 'default' ? undefined : task.model,
+      permissionMode: task.permissionMode === 'default' ? undefined : task.permissionMode,
     };
-
-    console.log('📤 [KanbanContext] Preparing to call API.startConversation with payload:', {
-      workingDirectory: conversationPayload.workingDirectory,
-      initialPromptLength: conversationPayload.initialPrompt.length,
-      initialPrompt: conversationPayload.initialPrompt.substring(0, 200) + '...'
-    });
 
     try {
       console.log('🔄 [KanbanContext] Calling api.startConversation...');
@@ -233,8 +260,9 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
   const refreshTasks = useCallback(() => {
     if (activeBoard) {
       const loadedTasks = kanbanStorage.getTasks(activeBoard.id);
-      setTasks(loadedTasks);
-      console.log('🔄 [KanbanContext] Refreshed tasks from localStorage:', loadedTasks.length);
+      const deduplicatedTasks = deduplicateTasks(loadedTasks);
+      setTasks(deduplicatedTasks);
+      console.log('🔄 [KanbanContext] Refreshed tasks from localStorage:', deduplicatedTasks.length);
     }
   }, [activeBoard]);
 
@@ -269,18 +297,23 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
       console.warn('⚠️ [KanbanContext] Found orphaned tasks in state:', orphanedTasks.map(t => t.id));
       // Remove orphaned tasks from state
       setTasks(prev => prev.filter(t => storageTaskIds.has(t.id)));
+      return; // Exit early to avoid race conditions
     }
 
     // Find tasks in storage but not in state (missing)
     const missingTasks = storageTasks.filter(t => !stateTaskIds.has(t.id));
     if (missingTasks.length > 0) {
       console.warn('⚠️ [KanbanContext] Found missing tasks in state:', missingTasks.map(t => t.id));
-      // Add missing tasks to state
-      setTasks(prev => [...prev, ...missingTasks]);
+      // Add missing tasks to state, ensuring no duplicates by checking current state
+      setTasks(prev => {
+        const currentTaskIds = new Set(prev.map(t => t.id));
+        const actuallyMissing = missingTasks.filter(t => !currentTaskIds.has(t.id));
+        return actuallyMissing.length > 0 ? [...prev, ...actuallyMissing] : prev;
+      });
     }
 
     console.log('✅ [KanbanContext] Task validation complete. State:', tasks.length, 'Storage:', storageTasks.length);
-  }, [activeBoard]);
+  }, [activeBoard, tasks]);
 
   // Periodic validation and sync (every 30 seconds)
   useEffect(() => {
@@ -312,6 +345,74 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
       .sort((a, b) => a.position - b.position);
   }, [tasks]);
 
+  // Get background tasks (tasks with active agents that user isn't watching)
+  const getBackgroundTasks = useCallback((): KanbanTask[] => {
+    return tasks.filter(t =>
+      t.agentStatus === 'active' &&
+      t.sessionId &&
+      // Don't include tasks that are currently being viewed in chat
+      !window.location.pathname.includes(`/c/${t.sessionId}`)
+    );
+  }, [tasks]);
+
+  // Monitor a background task by checking its status periodically
+  const monitorBackgroundTask = useCallback(async (sessionId: string): Promise<void> => {
+    try {
+      console.log('🔍 [KanbanContext] Starting background task monitoring for session:', sessionId);
+
+      // Check conversation status via API
+      const status = await api.getConversationStatus(sessionId);
+
+      // Find the corresponding task
+      const task = tasks.find(t => t.sessionId === sessionId);
+      if (!task) {
+        console.warn('⚠️ [KanbanContext] Task not found for session:', sessionId);
+        return;
+      }
+
+      // Update task based on conversation status
+      let updates: Partial<KanbanTask> = {};
+
+      if (status.completed) {
+        updates = {
+          agentStatus: 'completed',
+          column: 'done',
+          completedAt: new Date().toISOString(),
+          statusMessage: 'Task completed successfully',
+          progress: 100
+        };
+        console.log('✅ [KanbanContext] Background task completed:', task.title);
+      } else if (status.error) {
+        updates = {
+          agentStatus: 'error',
+          statusMessage: `Error: ${status.error}`,
+          progress: undefined
+        };
+        console.error('❌ [KanbanContext] Background task failed:', task.title, status.error);
+      } else if (status.statusMessage) {
+        updates = {
+          statusMessage: status.statusMessage,
+          progress: status.progress
+        };
+      }
+
+      // Apply updates if any
+      if (Object.keys(updates).length > 0) {
+        const updatedTask = kanbanStorage.updateTask(task.id, updates);
+        setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+      }
+    } catch (error) {
+      console.error('❌ [KanbanContext] Failed to monitor background task:', error);
+    }
+  }, [tasks]);
+
+  // Stop background monitoring for a session
+  const stopBackgroundMonitoring = useCallback((sessionId: string) => {
+    console.log('🛑 [KanbanContext] Stopping background monitoring for session:', sessionId);
+    // In a real implementation, this might clear intervals or close SSE connections
+    // For now, this is mainly for logging and cleanup
+  }, []);
+
   const value: KanbanContextValue = {
     boards,
     activeBoard,
@@ -329,6 +430,9 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
     refreshTasks,
     syncTask,
     validateAndSyncTasks,
+    getBackgroundTasks,
+    monitorBackgroundTask,
+    stopBackgroundMonitoring,
     getTasksByColumn,
   };
 

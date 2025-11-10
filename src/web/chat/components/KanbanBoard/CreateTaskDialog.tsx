@@ -4,8 +4,9 @@
  * Dialog for creating new Kanban tasks.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useKanban } from '../../contexts/KanbanContext';
+import { api } from '../../services/api';
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select';
+import { DropdownSelector, DropdownOption } from '../DropdownSelector';
+import { FolderOpen } from 'lucide-react';
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -38,11 +41,79 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
   const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [tags, setTags] = useState('');
   const [workingDirectory, setWorkingDirectory] = useState('');
+  const [model, setModel] = useState('default');
+  const [permissionMode, setPermissionMode] = useState('default');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Directory selection state
+  const [recentDirectories, setRecentDirectories] = useState<Record<string, { lastDate: string; shortname: string }>>({});
+  const [directoryOptions, setDirectoryOptions] = useState<DropdownOption<string>[]>([]);
+  const [isDirectoryLoading, setIsDirectoryLoading] = useState(false);
+
+  // Model options
+  const modelOptions = ['default', 'opus', 'sonnet'];
+
+  // Permission mode options
+  const permissionModeOptions = [
+    { value: 'default', label: 'Default (Ask for permission)' },
+    { value: 'acceptEdits', label: 'Accept Edits' },
+    { value: 'bypassPermissions', label: 'Bypass Permissions' },
+    { value: 'plan', label: 'Plan Mode' }
+  ];
+
+  // Load recent directories on mount
+  useEffect(() => {
+    const loadRecentDirectories = async () => {
+      try {
+        setIsDirectoryLoading(true);
+        const conversations = await api.getConversations({ limit: 50 });
+        const directoryMap: Record<string, { lastDate: string; shortname: string }> = {};
+
+        conversations.conversations.forEach(conv => {
+          if (conv.projectPath) {
+            if (!directoryMap[conv.projectPath] ||
+                new Date(conv.createdAt) > new Date(directoryMap[conv.projectPath].lastDate)) {
+              const shortname = conv.projectPath.split('/').pop() || conv.projectPath.split('\\').pop() || conv.projectPath;
+              directoryMap[conv.projectPath] = {
+                lastDate: conv.createdAt,
+                shortname
+              };
+            }
+          }
+        });
+
+        setRecentDirectories(directoryMap);
+
+        // Convert to dropdown options
+        const options: DropdownOption<string>[] = Object.entries(directoryMap)
+          .map(([path, data]) => ({
+            value: path,
+            label: data.shortname,
+            description: path
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label));
+
+        setDirectoryOptions(options);
+      } catch (err) {
+        console.error('Failed to load recent directories:', err);
+      } finally {
+        setIsDirectoryLoading(false);
+      }
+    };
+
+    if (open) {
+      loadRecentDirectories();
+    }
+  }, [open]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Prevent double submission
+    if (loading) {
+      return;
+    }
 
     if (!title.trim() || !description.trim()) {
       setError('Title and description are required');
@@ -59,6 +130,9 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
         priority,
         tags: tags.split(',').map(t => t.trim()).filter(t => t.length > 0),
         workingDirectory: workingDirectory.trim() || undefined,
+        // Store model and permission mode in tags or metadata for later use
+        model: model === 'default' ? undefined : model,
+        permissionMode: permissionMode === 'default' ? undefined : permissionMode,
       });
 
       // Reset form
@@ -67,6 +141,8 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
       setPriority('medium');
       setTags('');
       setWorkingDirectory('');
+      setModel('default');
+      setPermissionMode('default');
 
       onClose();
     } catch (err: any) {
@@ -83,6 +159,8 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
       setPriority('medium');
       setTags('');
       setWorkingDirectory('');
+      setModel('default');
+      setPermissionMode('default');
       setError(null);
       onClose();
     }
@@ -90,7 +168,7 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create New Task</DialogTitle>
           <DialogDescription>
@@ -140,15 +218,78 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
               </Select>
             </div>
 
+            {/* Model Selection */}
+            <div className="space-y-2">
+              <Label htmlFor="model">Model</Label>
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger id="model" className="w-full">
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {modelOptions.map((modelOption) => (
+                    <SelectItem key={modelOption} value={modelOption}>
+                      {modelOption === 'default' ? 'Default Model' : modelOption.toUpperCase()}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Permission Mode */}
+            <div className="space-y-2">
+              <Label htmlFor="permissionMode">Permission Mode</Label>
+              <Select value={permissionMode} onValueChange={setPermissionMode}>
+                <SelectTrigger id="permissionMode" className="w-full">
+                  <SelectValue placeholder="Select permission mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  {permissionModeOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             {/* Working Directory */}
             <div className="space-y-2">
               <Label htmlFor="workingDirectory">Working Directory</Label>
-              <Input
-                id="workingDirectory"
-                value={workingDirectory}
-                onChange={(e) => setWorkingDirectory(e.target.value)}
-                placeholder="/path/to/project (optional)"
-              />
+              <div className="relative">
+                {isDirectoryLoading ? (
+                  <div className="relative">
+                    <Input
+                      id="workingDirectory"
+                      value="Loading directories..."
+                      disabled
+                      className="pr-10 text-muted-foreground"
+                    />
+                    <FolderOpen className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                  </div>
+                ) : (
+                  <DropdownSelector
+                    options={directoryOptions}
+                    value={workingDirectory}
+                    onChange={setWorkingDirectory}
+                    placeholder="Select directory or type path..."
+                    showFilterInput={true}
+                    className="w-full"
+                    renderTrigger={({ isOpen, onClick }) => (
+                      <div className="relative">
+                        <Input
+                          id="workingDirectory"
+                          value={workingDirectory}
+                          onChange={(e) => setWorkingDirectory(e.target.value)}
+                          placeholder="Select directory or type path..."
+                          className="pr-10"
+                          onClick={onClick}
+                        />
+                        <FolderOpen className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                      </div>
+                    )}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Tags */}

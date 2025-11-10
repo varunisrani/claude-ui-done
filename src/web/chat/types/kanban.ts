@@ -55,6 +55,10 @@ export interface KanbanTask {
 
   // Working directory
   workingDirectory?: string;     // Working directory for the task
+
+  // Agent configuration (when assigned)
+  model?: string;                // AI model to use (default, opus, sonnet)
+  permissionMode?: string;       // Permission mode for agent
 }
 
 /**
@@ -67,6 +71,8 @@ export interface CreateTaskRequest {
   tags?: string[];
   workingDirectory?: string;
   boardId?: string;
+  model?: string;                // AI model to use
+  permissionMode?: string;       // Permission mode for agent
 }
 
 /**
