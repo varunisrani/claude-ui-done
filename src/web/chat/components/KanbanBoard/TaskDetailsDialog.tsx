@@ -23,6 +23,7 @@ import {
   Activity,
   AlertCircle,
   CheckCircle2,
+  CheckCircle,
   Pause,
   Loader2,
   Trash2,
@@ -41,7 +42,7 @@ interface TaskDetailsDialogProps {
 
 export function TaskDetailsDialog({ task, open, onClose }: TaskDetailsDialogProps) {
   const navigate = useNavigate();
-  const { deleteTask } = useKanban();
+  const { deleteTask, markTaskAsDone } = useKanban();
   const [isDeleting, setIsDeleting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
 
@@ -127,6 +128,20 @@ export function TaskDetailsDialog({ task, open, onClose }: TaskDetailsDialogProp
       alert('Failed to delete task');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleMarkAsDone = () => {
+    if (!confirm('Mark this task as done? This will move it to the Done column.')) {
+      return;
+    }
+
+    try {
+      markTaskAsDone(task.id);
+      onClose();
+    } catch (err) {
+      console.error('Failed to mark task as done:', err);
+      alert('Failed to mark task as done');
     }
   };
 
@@ -293,6 +308,19 @@ export function TaskDetailsDialog({ task, open, onClose }: TaskDetailsDialogProp
 
         <DialogFooter className="flex justify-between">
           <div className="flex gap-2">
+            {/* Mark as Done */}
+            {task.column !== 'done' && (
+              <Button
+                variant="outline"
+                onClick={handleMarkAsDone}
+                size="sm"
+                className="border-green-600 text-green-600 hover:bg-green-50"
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Mark as Done
+              </Button>
+            )}
+
             {/* Stop Agent */}
             {task.streamingId && task.agentStatus === 'active' && (
               <Button

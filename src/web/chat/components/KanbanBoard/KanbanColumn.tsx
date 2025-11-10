@@ -17,6 +17,7 @@ interface KanbanColumnProps {
   tasks: KanbanTask[];
   onTaskClick?: (task: KanbanTask) => void;
   onAssignClick?: (task: KanbanTask) => void;
+  onDoneClick?: (task: KanbanTask) => void;
   selectedTaskIds?: Set<string>;
   onSelectTask?: (taskId: string, selected: boolean) => void;
 }
@@ -27,6 +28,7 @@ export const KanbanColumn = memo(function KanbanColumn({
   tasks,
   onTaskClick,
   onAssignClick,
+  onDoneClick,
   selectedTaskIds = new Set(),
   onSelectTask,
 }: KanbanColumnProps) {
@@ -74,6 +76,7 @@ export const KanbanColumn = memo(function KanbanColumn({
                 task={task}
                 onClick={onTaskClick}
                 onAssignClick={onAssignClick}
+                onDoneClick={onDoneClick}
                 isSelected={selectedTaskIds.has(task.id)}
                 onSelect={onSelectTask ? (selected) => onSelectTask(task.id, selected) : undefined}
               />

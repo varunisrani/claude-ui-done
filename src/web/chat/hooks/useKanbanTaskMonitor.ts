@@ -29,9 +29,10 @@ export function useKanbanTaskMonitor(
 ) {
   const monitorsRef = useRef<Map<string, TaskMonitor>>(new Map());
 
-  // Get active tasks that need monitoring
+  // Get active tasks that need monitoring - include active and waiting tasks
   const activeTasks = tasks.filter(
-    task => task.streamingId && task.agentStatus === 'active'
+    task => task.streamingId &&
+    (task.agentStatus === 'active' || task.agentStatus === 'waiting')
   );
 
   // Handle stream events for a specific task
@@ -53,10 +54,14 @@ export function useKanbanTaskMonitor(
           break;
 
         case 'assistant':
-          // Agent is actively working
+          // Agent is actively working - update progress based on conversation activity
+          const currentProgress = task.progress || 0;
+          const newProgress = Math.min(currentProgress + 5, 90); // Incrementally increase progress, max 90% until completion
+
           updates = {
             agentStatus: 'active',
             statusMessage: 'Agent working...',
+            progress: newProgress,
           };
           break;
 
@@ -76,16 +81,18 @@ export function useKanbanTaskMonitor(
           updates = {
             agentStatus: isSuccess ? 'completed' : 'error',
             statusMessage: isSuccess
-              ? 'Task completed'
-              : 'Task failed',
+              ? `Task completed successfully (${resultEvent.num_turns} turns, ${Math.round(resultEvent.duration_ms / 1000)}s)`
+              : `Task failed: ${resultEvent.error || 'Unknown error'}`,
             completedAt: new Date().toISOString(),
             column: isSuccess ? 'done' : task.column, // Move to done if successful
+            progress: isSuccess ? 100 : task.progress, // Set progress to 100% on success
           };
 
-          console.log('[KanbanMonitor] Task completed', taskId, {
+          console.log('[KanbanMonitor] Task completion detected', taskId, {
             isSuccess,
             duration: resultEvent.duration_ms,
             turns: resultEvent.num_turns,
+            finalStatus: isSuccess ? 'completed' : 'error',
           });
           break;
 
@@ -98,12 +105,17 @@ export function useKanbanTaskMonitor(
           break;
 
         case 'closed':
-          // Stream closed
+          // Stream closed - check if task was completed or just disconnected
           if (task.agentStatus === 'active') {
-            // If task was active, mark as paused
             updates = {
               agentStatus: 'paused',
-              statusMessage: 'Connection closed',
+              statusMessage: 'Agent disconnected - may resume automatically',
+            };
+            console.log('[KanbanMonitor] Task disconnected while active', taskId);
+          } else if (task.agentStatus === 'waiting') {
+            updates = {
+              agentStatus: 'paused',
+              statusMessage: 'Permission request timed out',
             };
           }
           break;
@@ -117,6 +129,15 @@ export function useKanbanTaskMonitor(
 
           // Notify parent component
           onTaskUpdate?.(taskId, updates);
+
+          // If task is completed or error, we can stop monitoring it
+          if (updates.agentStatus === 'completed' || updates.agentStatus === 'error') {
+            console.log('[KanbanMonitor] Task finished, stopping monitoring', taskId);
+            // Remove from active monitors after a short delay to allow final UI updates
+            setTimeout(() => {
+              monitorsRef.current.delete(taskId);
+            }, 1000);
+          }
         } catch (err) {
           console.error('[KanbanMonitor] Failed to update task:', err);
         }

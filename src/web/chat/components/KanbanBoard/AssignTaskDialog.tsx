@@ -33,26 +33,51 @@ export function AssignTaskDialog({ task, open, onClose, onSuccess }: AssignTaskD
   const [error, setError] = useState<string | null>(null);
 
   const handleAssign = async () => {
-    if (!task) return;
+    console.log('🚀 [AssignTaskDialog] User clicked Assign button');
+    console.log('📋 [AssignTaskDialog] Task details:', {
+      id: task?.id,
+      title: task?.title,
+      description: task?.description?.substring(0, 100) + '...',
+      priority: task?.priority,
+      workingDirectory: task?.workingDirectory,
+      tags: task?.tags
+    });
 
+    if (!task) {
+      console.error('❌ [AssignTaskDialog] No task provided');
+      return;
+    }
+
+    console.log('⏳ [AssignTaskDialog] Starting assignment process...');
     setLoading(true);
     setError(null);
 
     try {
+      console.log('🔄 [AssignTaskDialog] Calling assignTaskToAgent with task ID:', task.id);
       // assignTaskToAgent now returns the sessionId
       const sessionId = await assignTaskToAgent(task.id);
 
+      console.log('✅ [AssignTaskDialog] Task assigned successfully! Session ID:', sessionId);
+
       // Success - close dialog
+      console.log('🔒 [AssignTaskDialog] Closing dialog...');
       onClose();
 
       // Call success callback with the sessionId
       if (onSuccess) {
+        console.log('📞 [AssignTaskDialog] Calling success callback with session ID:', sessionId);
         onSuccess(sessionId);
       }
     } catch (err) {
-      console.error('Failed to assign task:', err);
+      console.error('❌ [AssignTaskDialog] Failed to assign task:', err);
+      console.error('🔍 [AssignTaskDialog] Error details:', {
+        name: err instanceof Error ? err.name : 'Unknown',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : 'No stack trace'
+      });
       setError(err instanceof Error ? err.message : 'Failed to assign task');
     } finally {
+      console.log('🏁 [AssignTaskDialog] Assignment process completed, setting loading to false');
       setLoading(false);
     }
   };

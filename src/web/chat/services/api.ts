@@ -89,10 +89,31 @@ class ApiService {
   }
 
   async startConversation(request: StartConversationRequest): Promise<StartConversationResponse> {
-    return this.apiCall('/api/conversations/start', {
-      method: 'POST',
-      body: JSON.stringify(request),
+    console.log('🌐 [API] startConversation called with request:', {
+      workingDirectory: request.workingDirectory,
+      initialPromptLength: request.initialPrompt?.length || 0,
+      initialPrompt: request.initialPrompt?.substring(0, 150) + (request.initialPrompt?.length > 150 ? '...' : ''),
+      sessionId: request.sessionId,
+      hasOptions: !!request.options
     });
+
+    try {
+      const response = await this.apiCall('/api/conversations/start', {
+        method: 'POST',
+        body: JSON.stringify(request),
+      });
+
+      console.log('✅ [API] startConversation successful response:', {
+        sessionId: response.sessionId,
+        streamingId: response.streamingId,
+        status: response.status
+      });
+
+      return response;
+    } catch (error) {
+      console.error('❌ [API] startConversation failed:', error);
+      throw error;
+    }
   }
 
 

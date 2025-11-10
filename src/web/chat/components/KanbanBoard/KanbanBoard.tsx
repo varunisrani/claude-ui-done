@@ -36,7 +36,7 @@ import type { KanbanTask } from '../../types/kanban';
 
 export function KanbanBoard() {
   const navigate = useNavigate();
-  const { activeBoard, getTasksByColumn, loading, error, tasks, refreshTasks, moveTask, deleteTask } = useKanban();
+  const { activeBoard, getTasksByColumn, loading, error, tasks, refreshTasks, moveTask, deleteTask, markTaskAsDone } = useKanban();
 
   // Dialog states
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -291,6 +291,10 @@ export function KanbanBoard() {
     navigate(`/c/${sessionId}`);
   };
 
+  const handleDoneClick = (task: KanbanTask) => {
+    markTaskAsDone(task.id);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -424,6 +428,7 @@ export function KanbanBoard() {
                       tasks={columnTasks}
                       onTaskClick={handleTaskClick}
                       onAssignClick={handleAssignClick}
+                      onDoneClick={handleDoneClick}
                       selectedTaskIds={selectedTaskIds}
                       onSelectTask={handleSelectTask}
                     />

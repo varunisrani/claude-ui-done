@@ -509,18 +509,185 @@ export class ClaudeProcessManager extends EventEmitter {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { NODE_OPTIONS, VSCODE_INSPECTOR_OPTIONS, ...cleanEnv } = spawnConfig.env;
       
+      // Validate working directory before spawning
+      this.logger.debug('Validating working directory', {
+        streamingId,
+        workingDirectory: spawnConfig.cwd,
+        originalWorkingDirectory: config.workingDirectory
+      });
+
+      if (!spawnConfig.cwd || typeof spawnConfig.cwd !== 'string') {
+        this.logger.error('Invalid working directory provided', {
+          streamingId,
+          workingDirectory: spawnConfig.cwd,
+          type: typeof spawnConfig.cwd
+        });
+        throw new CUIError('INVALID_WORKING_DIRECTORY', `Invalid working directory: ${spawnConfig.cwd}`, 400);
+      }
+
+      // Strip quotes from working directory if present (common issue with frontend)
+      const stripQuotes = (pathStr: string): string => {
+        // Remove leading and trailing quotes
+        if ((pathStr.startsWith('"') && pathStr.endsWith('"')) ||
+            (pathStr.startsWith("'") && pathStr.endsWith("'"))) {
+          return pathStr.slice(1, -1);
+        }
+        return pathStr;
+      };
+
+      const strippedCwd = stripQuotes(spawnConfig.cwd);
+      this.logger.debug('Working directory quote stripping', {
+        streamingId,
+        originalCwd: spawnConfig.cwd,
+        strippedCwd
+      });
+
+      // Normalize the working directory path, especially on Windows
+      const normalizedCwd = path.resolve(strippedCwd);
+      this.logger.debug('Working directory normalized', {
+        streamingId,
+        originalCwd: spawnConfig.cwd,
+        strippedCwd,
+        normalizedCwd
+      });
+
+      // Validate that the working directory exists
+      if (!existsSync(normalizedCwd)) {
+        this.logger.error('Working directory does not exist', {
+          streamingId,
+          originalCwd: spawnConfig.cwd,
+          strippedCwd,
+          normalizedCwd,
+          exists: false
+        });
+        throw new CUIError('WORKING_DIRECTORY_NOT_FOUND', `Working directory does not exist: ${normalizedCwd}`, 404);
+      }
+
+      this.logger.info('Working directory validated', {
+        streamingId,
+        normalizedCwd,
+        exists: true
+      });
+
       const envWithStreamingId = {
         ...cleanEnv,
         CUI_STREAMING_ID: streamingId,
-        PWD: spawnConfig.cwd,
-        INIT_CWD: spawnConfig.cwd
+        PWD: normalizedCwd,
+        INIT_CWD: normalizedCwd
       };
-      
-      const process = this.spawnProcess(
-        { ...spawnConfig, env: envWithStreamingId }, 
-        args, 
-        streamingId
-      );
+
+      // ENHANCED: Intelligent retry logic with error categorization
+      let process: any;
+      let lastError: Error | null = null;
+      const maxRetries = 3;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          this.logger.debug(`Spawn attempt ${attempt}/${maxRetries}`, {
+            streamingId,
+            executablePath: spawnConfig.executablePath,
+            workingDirectory: normalizedCwd
+          });
+
+          const spawnStartTime = Date.now();
+          process = await this.spawnProcess(
+            { ...spawnConfig, cwd: normalizedCwd, env: envWithStreamingId },
+            args,
+            streamingId,
+            attempt,
+            maxRetries,
+            spawnStartTime
+          );
+
+          // Success - break out of retry loop
+          this.logger.info(`Spawn succeeded on attempt ${attempt}`, {
+            streamingId,
+            pid: process.pid,
+            timeTaken: Date.now() - spawnStartTime
+          });
+          break;
+
+        } catch (spawnError: any) {
+          lastError = spawnError;
+          const timeSinceStart = Date.now() - (spawnError.timeSinceStart || 0);
+
+          // Categorize the error to determine retry strategy
+          const isPathRelated = ['ENOENT', 'EACCES', 'EPERM', 'EEXIST'].includes(spawnError.code);
+          const isTimingRelated = ['ETIMEDOUT', 'ECONNRESET', 'EPIPE'].includes(spawnError.code);
+          const isResourceRelated = ['EMFILE', 'ENFILE', 'ENOMEM'].includes(spawnError.code);
+          const isCUIError = spawnError instanceof CUIError;
+
+          this.logger.warn(`Spawn attempt ${attempt} failed`, {
+            streamingId,
+            errorCode: spawnError.code,
+            errorMessage: spawnError.message,
+            timeSinceStart,
+            isPathRelated,
+            isTimingRelated,
+            isResourceRelated,
+            isCUIError,
+            errorType: spawnError.constructor.name
+          });
+
+          // Decide whether to retry based on error type
+          if (isPathRelated) {
+            // Path-related errors should fail fast - no retries needed
+            this.logger.error('Path-related error detected - failing fast without retries', {
+              streamingId,
+              errorCode: spawnError.code,
+              errorMessage: spawnError.message
+            });
+            throw spawnError;
+          }
+
+          if (isCUIError && spawnError.code === 'CLAUDE_NOT_FOUND') {
+            // Claude not found should fail fast
+            this.logger.error('Claude executable not found - failing fast', {
+              streamingId,
+              attemptedPath: spawnConfig.executablePath
+            });
+            throw spawnError;
+          }
+
+          if (attempt === maxRetries) {
+            // Last attempt failed - give up
+            this.logger.error(`All ${maxRetries} spawn attempts failed`, {
+              streamingId,
+              lastErrorCode: spawnError.code,
+              lastErrorMessage: spawnError.message,
+              totalAttempts: attempt
+            });
+            throw spawnError;
+          }
+
+          // Calculate retry delay based on error type
+          let retryDelay = 1000; // Base delay
+
+          if (isTimingRelated) {
+            retryDelay = 2000 * attempt; // Exponential backoff for timing issues
+          } else if (isResourceRelated) {
+            retryDelay = 3000 * attempt; // Longer backoff for resource issues
+          } else {
+            retryDelay = 1000 * attempt; // Standard backoff for unknown errors
+          }
+
+          this.logger.info(`Retrying spawn in ${retryDelay}ms`, {
+            streamingId,
+            attempt,
+            maxRetries,
+            retryDelay,
+            reason: spawnError.code || 'unknown error'
+          });
+
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
+      }
+
+      // Ensure we have a valid process at this point
+      if (!process) {
+        throw lastError || new Error('Failed to spawn Claude process after retries');
+      }
       
       this.processes.set(streamingId, process);
       this.setupProcessHandlers(streamingId, process);
@@ -611,7 +778,8 @@ export class ClaudeProcessManager extends EventEmitter {
 
   private buildBaseArgs(): string[] {
     return [
-      '-p', // Print mode - required for programmatic use
+      // Note: Removed -p flag to allow streaming conversation mode
+      // Using conversation mode instead of print mode for proper JSONL output
     ];
   }
 
@@ -648,7 +816,7 @@ export class ClaudeProcessManager extends EventEmitter {
   }
 
   private buildStartArgs(config: ConversationConfig): string[] {
-    this.logger.debug('Building Claude start args', { 
+    this.logger.debug('Building Claude start args', {
       hasInitialPrompt: !!config.initialPrompt,
       promptPreview: config.initialPrompt ? config.initialPrompt.substring(0, 50) + (config.initialPrompt.length > 50 ? '...' : '') : null,
       workingDirectory: config.workingDirectory,
@@ -656,15 +824,16 @@ export class ClaudeProcessManager extends EventEmitter {
     });
     const args = this.buildBaseArgs();
 
-    // Add initial prompt immediately after -p
+    // In conversation mode, we add the output format first
+    args.push(
+      '--output-format', 'stream-json', // JSONL output format
+      '--verbose' // Required for stream-json format
+    );
+
+    // Add initial prompt as a message argument in conversation mode
     if (config.initialPrompt) {
       args.push(config.initialPrompt);
     }
-
-    args.push(
-      '--output-format', 'stream-json', // JSONL output format
-      '--verbose' // Required when using stream-json with print mode
-    );
 
     // Add working directory access
     // if (config.workingDirectory) {
@@ -715,11 +884,14 @@ export class ClaudeProcessManager extends EventEmitter {
   /**
    * Consolidated method to spawn Claude processes for both start and resume operations
    */
-  private spawnProcess(
+  private async spawnProcess(
     spawnConfig: { executablePath: string; cwd: string; env: NodeJS.ProcessEnv },
     args: string[],
-    streamingId: string
-  ): ChildProcess {
+    streamingId: string,
+    attempt: number = 1,
+    maxRetries: number = 3,
+    spawnStartTime?: number
+  ): Promise<ChildProcess> {
     const { executablePath, cwd } = spawnConfig;
     let { env } = spawnConfig;
 
@@ -759,84 +931,272 @@ export class ClaudeProcessManager extends EventEmitter {
       }
     }
     
-    this.logger.debug('Spawning Claude process', { 
+    this.logger.info('Starting Claude process spawn', {
       streamingId,
-      executablePath, 
-      args, 
+      executablePath,
+      args,
       cwd,
-      PATH: env.PATH,
+      PATH: env.PATH ? 'SET' : 'NOT_SET',
       nodeVersion: process.version,
-      platform: process.platform
+      platform: process.platform,
+      processArch: process.arch,
+      isWindows: process.platform === 'win32'
     });
-    
+
     try {
-      this.logger.debug('Calling spawn() with stdio configuration', {
+      this.logger.debug('Configuring spawn parameters', {
         streamingId,
         stdin: 'inherit',
-        stdout: 'pipe', 
-        stderr: 'pipe'
+        stdout: 'pipe',
+        stderr: 'pipe',
+        shell: process.platform === 'win32'
       });
-      
+
       // Log the exact command for debugging
       const fullCommand = `${executablePath} ${args.join(' ')}`;
-      this.logger.debug('SPAWNING CLAUDE COMMAND: ' + fullCommand, { 
+      this.logger.info('SPAWNING CLAUDE COMMAND: ' + fullCommand, {
         streamingId,
         fullCommand,
         executablePath,
         args,
         cwd,
-        env: Object.entries(env).reduce((acc, [key, value]) => {
-          acc[key] = value;
-          return acc;
-        }, {} as Record<string, string | undefined>)
+        envKeys: Object.keys(env).filter(key => !key.includes('KEY') && !key.includes('TOKEN')),
+        argsCount: args.length
       });
-      
+
       // On Windows, use shell option to handle .cmd files and paths with spaces
       const isWindows = process.platform === 'win32';
 
-      // When using shell on Windows, quote the executable path if it contains spaces
-      const finalExecutablePath = isWindows && executablePath.includes(' ')
-        ? `"${executablePath}"`
-        : executablePath;
+      // Enhanced Windows path handling
+      let finalExecutablePath = executablePath;
+      if (isWindows) {
+        // Handle different Windows executable types
+        if (executablePath.endsWith('.cmd') || executablePath.endsWith('.bat')) {
+          // For batch files, we need the shell
+          this.logger.debug('Using Windows batch file execution', {
+            streamingId,
+            executableType: 'batch',
+            executablePath
+          });
+        }
+
+        // Quote the executable path if it contains spaces and isn't already quoted
+        if (executablePath.includes(' ') && !executablePath.startsWith('"') && !executablePath.endsWith('"')) {
+          finalExecutablePath = `"${executablePath}"`;
+          this.logger.debug('Quoted executable path for Windows', {
+            streamingId,
+            originalPath: executablePath,
+            quotedPath: finalExecutablePath
+          });
+        }
+      }
+
+      // Determine shell usage based on executable type and path characteristics
+      const needsShell = isWindows && (
+        executablePath.endsWith('.cmd') ||
+        executablePath.endsWith('.bat') ||
+        finalExecutablePath !== executablePath || // Path was quoted
+        args.some(arg => arg.includes(' ')) // Args contain spaces
+      );
+
+      this.logger.debug('Spawn configuration', {
+        streamingId,
+        executablePath,
+        finalExecutablePath,
+        needsShell,
+        isWindows,
+        hasSpacesInPath: executablePath.includes(' ') || finalExecutablePath.includes(' '),
+        hasSpacesInArgs: args.some(arg => arg.includes(' '))
+      });
+
+      this.logger.info('Attempting to spawn Claude process', {
+        streamingId,
+        command: `${finalExecutablePath} ${args.join(' ')}`,
+        cwd: cwd,
+        envKeys: Object.keys(env).slice(0, 10), // Show first 10 env keys
+        envCount: Object.keys(env).length,
+        needsShell,
+        stdioConfig: { stdin: 'inherit', stdout: 'pipe', stderr: 'pipe' }
+      });
 
       const claudeProcess = spawn(finalExecutablePath, args, {
         cwd,
         env,
         stdio: ['inherit', 'pipe', 'pipe'], // stdin inherited, stdout/stderr piped for capture
-        shell: isWindows // Use shell on Windows to properly handle .cmd files and paths with spaces
+        shell: needsShell
       });
       
       // Handle spawn errors (like ENOENT when claude is not found)
       claudeProcess.on('error', (error: Error & NodeJS.ErrnoException) => {
-        this.logger.error('Claude process spawn error', error, {
+        const actualSpawnStartTime = spawnStartTime || Date.now();
+    const timeSinceStart = Date.now() - actualSpawnStartTime;
+
+        // Enhanced error categorization and diagnostics
+        const errorContext = {
           streamingId,
           errorCode: error.code,
           errorErrno: error.errno,
           errorSyscall: error.syscall,
           errorPath: error.path,
-          errorSpawnargs: (error as Error & NodeJS.ErrnoException & { spawnargs?: string[] }).spawnargs // spawnargs is not in the type definition but exists at runtime
-        });
-        // Emit error event instead of throwing synchronously in callback
+          errorSpawnargs: (error as Error & NodeJS.ErrnoException & { spawnargs?: string[] }).spawnargs,
+          timeSinceStart,
+          attempt,
+          maxRetries,
+          executablePath,
+          workingDirectory: cwd,
+          platform: process.platform,
+          isWindows,
+          needsShell
+        };
+
+        this.logger.error('Claude process spawn error', error, errorContext);
+
+        // Log immediate post-spawn diagnostics with error categorization
+        console.error('🔍 [IMMEDIATE POST-SPAWN DIAGNOSTICS]');
+        console.error('   Error type:', error.constructor.name);
+
+        if (error.code) {
+          console.error('   Error code:', error.code);
+          const errorMeaning = this.getErrorMeaning(error.code);
+          console.error('   Error meaning:', errorMeaning);
+
+          // Categorize error for retry decision
+          const isPathRelated = ['ENOENT', 'EACCES', 'EPERM', 'EEXIST'].includes(error.code);
+          const isTimingRelated = ['ETIMEDOUT', 'ECONNRESET', 'EPIPE'].includes(error.code);
+          const isResourceRelated = ['EMFILE', 'ENFILE', 'ENOMEM'].includes(error.code);
+
+          if (isPathRelated) {
+            console.error('   🚫 PATH-RELATED ERROR (should fail fast)');
+          } else if (isTimingRelated) {
+            console.error('   ⏰ TIMING-RELATED ERROR (should retry)');
+          } else if (isResourceRelated) {
+            console.error('   💾 RESOURCE-RELATED ERROR (should retry with delay)');
+          } else {
+            console.error('   ❓ UNKNOWN ERROR TYPE (will retry cautiously)');
+          }
+        }
+
+        if (error.errno) {
+          console.error('   System errno:', error.errno);
+          console.error('   Errno description:', error.errno);
+        }
+
+        if (error.path) {
+          console.error('   Executable path:', error.path);
+          console.error('   Path exists check:', fs.existsSync(error.path) ? '✅ EXISTS' : '❌ MISSING');
+        }
+
+        if (error.spawnargs) {
+          console.error('   Spawn args:', error.spawnargs.map(arg =>
+            arg.includes(' ') ? `"${arg}"` : arg
+          ).join(' '));
+        }
+
+        if (error.signal) {
+          console.error('   Signal received:', error.signal);
+          console.error('   Signal meaning:', this.getSignalMeaning(error.signal));
+        }
+
+        if (error.status) {
+          console.error('   Exit status:', error.status);
+          console.error('   Exit status meaning:', this.getExitStatusMeaning(error.status));
+        }
+
+        // Log timing context
+        console.error('   ⏱️ Time to failure:', `${timeSinceStart}ms`);
+        console.error('   🔄 Retry count:', `${attempt}/${maxRetries}`);
+
+        // Suggest next action based on error analysis
+        if (timeSinceStart < 100) {
+          console.error('   💡 SUGGESTION: Failed very quickly - likely path/configuration issue');
+        } else if (timeSinceStart > 5000) {
+          console.error('   💡 SUGGESTION: Took time to fail - might be timeout or resource issue');
+        }
+
+        // Emit appropriate error based on analysis
         if (error.code === 'ENOENT') {
           this.logger.error('Claude executable not found', {
             streamingId,
             attemptedPath: executablePath,
-            PATH: env.PATH
+            PATH: env.PATH,
+            workingDirectory: cwd
           });
           this.emit('spawn-error', new CUIError('CLAUDE_NOT_FOUND', 'Claude CLI not found. Please ensure Claude is installed and in PATH.', 500));
+        } else if (['EACCES', 'EPERM'].includes(error.code || '')) {
+          this.emit('spawn-error', new CUIError('PERMISSION_DENIED', `Permission denied accessing Claude executable: ${error.message}`, 500));
         } else {
           this.emit('spawn-error', new CUIError('PROCESS_SPAWN_FAILED', `Failed to spawn Claude process: ${error.message}`, 500));
         }
       });
       
-      if (!claudeProcess.pid) {
-        this.logger.error('Failed to spawn Claude process - no PID assigned', {
+      // Enhanced PID assignment with retry logic for Windows
+      let retryCount = 0;
+      const maxRetries = isWindows ? 10 : 5; // More retries on Windows
+      const retryDelay = isWindows ? 200 : 100; // Longer delays on Windows
+
+      while (!claudeProcess.pid && retryCount < maxRetries) {
+        this.logger.debug(`Waiting for PID assignment (attempt ${retryCount + 1}/${maxRetries})`, {
           streamingId,
           killed: claudeProcess.killed,
           exitCode: claudeProcess.exitCode,
-          signalCode: claudeProcess.signalCode
+          signalCode: claudeProcess.signalCode,
+          platform: process.platform
         });
-        throw new Error('Failed to spawn Claude process - no PID assigned');
+
+        // Wait for PID assignment with exponential backoff
+        await new Promise(resolve => setTimeout(resolve, retryDelay * Math.pow(1.5, retryCount)));
+        retryCount++;
+      }
+
+      if (!claudeProcess.pid) {
+        this.logger.error('Failed to spawn Claude process - no PID assigned after retries', {
+          streamingId,
+          retryCount,
+          maxRetries,
+          killed: claudeProcess.killed,
+          exitCode: claudeProcess.exitCode,
+          signalCode: claudeProcess.signalCode,
+          spawnfile: claudeProcess.spawnfile,
+          spawnargs: claudeProcess.spawnargs,
+          platform: process.platform,
+          isWindows,
+          executablePath,
+          cwd
+        });
+
+        // On Windows, try alternative spawning approach
+        if (isWindows) {
+          this.logger.warn('Attempting alternative Windows spawn approach', { streamingId });
+          try {
+            // Try without shell first
+            const altProcess = spawn(executablePath, args, {
+              cwd,
+              env,
+              stdio: ['inherit', 'pipe', 'pipe']
+            });
+
+            // Wait a bit for the alternative approach
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            if (altProcess.pid) {
+              this.logger.info('Alternative Windows spawn approach succeeded', {
+                streamingId,
+                pid: altProcess.pid,
+                spawnfile: altProcess.spawnfile
+              });
+              return altProcess;
+            } else {
+              altProcess.kill(); // Clean up the failed alternative process
+            }
+          } catch (altError) {
+            this.logger.error('Alternative Windows spawn approach also failed', {
+              streamingId,
+              error: altError instanceof Error ? altError.message : String(altError)
+            });
+          }
+        }
+
+        throw new Error(`Failed to spawn Claude process - no PID assigned after ${retryCount} retries${isWindows ? ' (including Windows alternative approach)' : ''}`);
       }
       
       this.logger.info('Claude process spawned successfully', { 
@@ -1003,16 +1363,58 @@ export class ClaudeProcessManager extends EventEmitter {
   private handleProcessError(streamingId: string, error: Error | Buffer): void {
     const errorMessage = error.toString();
     const isBuffer = Buffer.isBuffer(error);
-    
-    this.logger.error('Process error occurred', { 
-      streamingId, 
+
+    this.logger.error('Process error occurred', {
+      streamingId,
       error: errorMessage,
       errorType: isBuffer ? 'stderr-output' : error.constructor.name,
       errorLength: errorMessage.length,
       processStillActive: this.processes.has(streamingId),
       timestamp: new Date().toISOString()
     });
-    
+
     this.emit('process-error', { streamingId, error: errorMessage });
+  }
+
+  // Helper methods for enhanced error diagnostics
+  private getErrorMeaning(errorCode: string): string {
+    const errorMeanings: Record<string, string> = {
+      'ENOENT': 'File or directory not found',
+      'EACCES': 'Permission denied',
+      'EPERM': 'Operation not permitted',
+      'EEXIST': 'File already exists',
+      'ETIMEDOUT': 'Operation timed out',
+      'ECONNRESET': 'Connection reset by peer',
+      'EPIPE': 'Broken pipe',
+      'EMFILE': 'Too many open files',
+      'ENFILE': 'System limit on open files reached',
+      'ENOMEM': 'Not enough memory'
+    };
+    return errorMeanings[errorCode] || 'Unknown error code';
+  }
+
+  private getSignalMeaning(signal: string): string {
+    const signalMeanings: Record<string, string> = {
+      'SIGTERM': 'Termination signal',
+      'SIGINT': 'Interrupt signal (Ctrl+C)',
+      'SIGKILL': 'Kill signal (cannot be caught)',
+      'SIGSEGV': 'Segmentation violation',
+      'SIGABRT': 'Abort signal',
+      'SIGFPE': 'Floating point exception',
+      'SIGILL': 'Illegal instruction',
+      'SIGBUS': 'Bus error'
+    };
+    return signalMeanings[signal] || 'Unknown signal';
+  }
+
+  private getExitStatusMeaning(status: number): string {
+    if (status === 0) return 'Normal exit';
+    if (status === 1) return 'General error';
+    if (status === 2) return 'Misuse of shell builtins';
+    if (status === 126) return 'Command invoked cannot execute';
+    if (status === 127) return 'Command not found';
+    if (status === 128) return 'Invalid exit argument';
+    if (status >= 129 && status <= 192) return `Fatal error signal (${status - 128})`;
+    return `Unknown exit status (${status})`;
   }
 }

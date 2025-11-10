@@ -18,6 +18,7 @@ interface TaskCardProps {
   task: KanbanTask;
   onClick?: (task: KanbanTask) => void;
   onAssignClick?: (task: KanbanTask) => void;
+  onDoneClick?: (task: KanbanTask) => void;
   isDragging?: boolean;
   isSelected?: boolean;
   onSelect?: (selected: boolean) => void;
@@ -27,6 +28,7 @@ export const TaskCard = memo(function TaskCard({
   task,
   onClick,
   onAssignClick,
+  onDoneClick,
   isDragging = false,
   isSelected = false,
   onSelect
@@ -217,6 +219,34 @@ export const TaskCard = memo(function TaskCard({
         </button>
       )}
 
+      {/* Mark as Done Button (for in-progress tasks that can be manually completed) */}
+      {task.column === 'inprogress' && task.agentStatus !== 'idle' && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDoneClick?.(task);
+          }}
+          className="mt-3 w-full px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+        >
+          <CheckCircle className="w-4 h-4" />
+          Mark as Done
+        </button>
+      )}
+
+      {/* Manual Complete Button (for tasks without active agents) */}
+      {task.column === 'inprogress' && task.agentStatus === 'idle' && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDoneClick?.(task);
+          }}
+          className="mt-3 w-full px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+        >
+          <CheckCircle className="w-4 h-4" />
+          Mark as Done
+        </button>
+      )}
+
       {/* Task Footer */}
       <div className="pt-2 border-t border-gray-200">
         <div className="flex items-center justify-between text-xs text-gray-500">
@@ -235,13 +265,46 @@ export const TaskCard = memo(function TaskCard({
             </div>
           )}
 
-          {/* Active indicator for in-progress tasks */}
-          {task.agentStatus === 'active' && (
-            <div className="flex items-center gap-1 text-blue-600">
-              <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
-              <span className="font-medium">Working</span>
-            </div>
-          )}
+          {/* Dynamic Status Indicator */}
+          {(() => {
+            if (task.column === 'done') {
+              return (
+                <div className="flex items-center gap-1 text-green-600">
+                  <CheckCircle className="w-3 h-3" />
+                  <span className="font-medium">Done</span>
+                </div>
+              );
+            } else if (task.agentStatus === 'active') {
+              return (
+                <div className="flex items-center gap-1 text-blue-600">
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
+                  <span className="font-medium">Working</span>
+                </div>
+              );
+            } else if (task.agentStatus === 'completed') {
+              return (
+                <div className="flex items-center gap-1 text-green-600">
+                  <CheckCircle className="w-3 h-3" />
+                  <span className="font-medium">Completed</span>
+                </div>
+              );
+            } else if (task.agentStatus === 'error') {
+              return (
+                <div className="flex items-center gap-1 text-red-600">
+                  <AlertCircle className="w-3 h-3" />
+                  <span className="font-medium">Error</span>
+                </div>
+              );
+            } else if (task.agentStatus === 'paused') {
+              return (
+                <div className="flex items-center gap-1 text-orange-600">
+                  <Pause className="w-3 h-3" />
+                  <span className="font-medium">Paused</span>
+                </div>
+              );
+            }
+            return null;
+          })()}
         </div>
 
         {/* Working Directory */}
