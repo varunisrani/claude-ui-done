@@ -134,6 +134,7 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
     const conversationPayload = {
       workingDirectory: task.working_directory || process.cwd(),
       initialPrompt: `${task.title}\n\n${task.description}`,
+      systemPrompt: task.system_prompt,
     };
 
     try {

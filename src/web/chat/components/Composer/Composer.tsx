@@ -32,7 +32,7 @@ export interface ComposerProps {
   // Core functionality
   value?: string;
   onChange?: (value: string) => void;
-  onSubmit: (message: string, workingDirectory?: string, model?: string, permissionMode?: string) => void;
+  onSubmit: (message: string, workingDirectory?: string, model?: string, permissionMode?: string, systemPrompt?: string) => void;
   placeholder?: string;
   isLoading?: boolean;
   disabled?: boolean;
@@ -297,6 +297,7 @@ function AutocompleteDropdown({
 interface ComposerCache {
   selectedPermissionMode: string;
   draft: string;
+  systemPrompt: string;
 }
 
 export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer({
@@ -333,6 +334,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const [cachedState, setCachedState] = useLocalStorage<ComposerCache>('cui-composer', {
     selectedPermissionMode: 'default',
     draft: '',
+    systemPrompt: '',
   });
 
   // Use controlled or uncontrolled value
@@ -348,6 +350,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const [selectedDirectory, setSelectedDirectory] = useState(workingDirectory || 'Select directory');
   const [selectedModel, setSelectedModel] = useState(model);
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<string>(cachedState.selectedPermissionMode);
+  const [systemPrompt, setSystemPrompt] = useState(cachedState.systemPrompt || '');
+  const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   const [isPermissionDropdownOpen, setIsPermissionDropdownOpen] = useState(false);
   const [localFileSystemEntries, setLocalFileSystemEntries] = useState<FileSystemEntry[]>(fileSystemEntries);
   const [localCommands, setLocalCommands] = useState<Command[]>(availableCommands);
@@ -421,8 +425,9 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     setCachedState({
       selectedPermissionMode,
       draft: value,
+      systemPrompt,
     });
-  }, [selectedPermissionMode, value, setCachedState]);
+  }, [selectedPermissionMode, value, systemPrompt, setCachedState]);
 
   // Auto-select most recent directory on mount (for Home usage)
   useEffect(() => {
@@ -726,7 +731,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
         trimmedValue,
         showDirectorySelector ? selectedDirectory : undefined,
         showModelSelector ? selectedModel : undefined,
-        permissionMode
+        permissionMode,
+        systemPrompt.trim() || undefined
       );
 
       setValue('');
@@ -959,7 +965,43 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                       onModelSelect={handleModelSelect}
                     />
                   )}
+
+                  {/* System Prompt Toggle */}
+                  {showModelSelector && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant={showSystemPrompt ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setShowSystemPrompt(!showSystemPrompt)}
+                            className="h-9 px-3 text-xs font-medium"
+                          >
+                            <Sparkles className="w-3 h-3 mr-1" />
+                            System
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Add a system prompt to guide Claude's behavior</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
                 </div>
+
+                {/* System Prompt Input */}
+                {showSystemPrompt && (
+                  <div className="mt-2 w-full">
+                    <Textarea
+                      value={systemPrompt}
+                      onChange={(e) => setSystemPrompt(e.target.value)}
+                      placeholder="You are an expert assistant. Always provide detailed and helpful responses..."
+                      className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
+                      rows={2}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           )}

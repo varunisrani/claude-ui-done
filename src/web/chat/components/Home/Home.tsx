@@ -97,17 +97,18 @@ export function Home() {
     ? conversations[0].projectPath 
     : undefined;
 
-  const handleComposerSubmit = async (text: string, workingDirectory: string, model: string, permissionMode: string) => {
+  const handleComposerSubmit = async (text: string, workingDirectory: string, model: string, permissionMode: string, systemPrompt?: string) => {
     setIsSubmitting(true);
-    
+
     try {
       const response = await api.startConversation({
         workingDirectory,
         initialPrompt: text,
         model: model === 'default' ? undefined : model,
         permissionMode: permissionMode === 'default' ? undefined : permissionMode,
+        systemPrompt: systemPrompt && systemPrompt.trim() ? systemPrompt.trim() : undefined,
       });
-      
+
       // Navigate to the conversation page
       navigate(`/c/${response.sessionId}`);
     } catch (error) {

@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from '../ui/select';
 import { DropdownSelector, DropdownOption } from '../DropdownSelector';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, Sparkles } from 'lucide-react';
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -43,6 +43,8 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [model, setModel] = useState('default');
   const [permissionMode, setPermissionMode] = useState('default');
+  const [systemPrompt, setSystemPrompt] = useState('');
+  const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -160,6 +162,7 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
           requires_special_permissions: permissionMode !== 'default',
           access_level: permissionMode
         },
+        system_prompt: systemPrompt.trim() || undefined,
         logs: [],
       });
 
@@ -171,6 +174,8 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
       setWorkingDirectory('');
       setModel('default');
       setPermissionMode('default');
+      setSystemPrompt('');
+      setShowSystemPrompt(false);
 
       onClose();
     } catch (err: any) {
@@ -278,6 +283,33 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* System Prompt */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="systemPrompt">System Prompt (Optional)</Label>
+                <Button
+                  type="button"
+                  variant={showSystemPrompt ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setShowSystemPrompt(!showSystemPrompt)}
+                  className="h-7 px-2 text-xs"
+                >
+                  <Sparkles className="w-3 h-3 mr-1" />
+                  {showSystemPrompt ? 'Hide' : 'Show'}
+                </Button>
+              </div>
+              {showSystemPrompt && (
+                <Textarea
+                  id="systemPrompt"
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="You are an expert assistant. Always provide detailed and helpful responses..."
+                  rows={3}
+                  className="w-full"
+                />
+              )}
             </div>
 
             {/* Working Directory */}

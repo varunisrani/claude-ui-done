@@ -93,6 +93,7 @@ export interface Task {
   // Additional fields
   working_directory?: string
   agent_conversation_id?: string
+  system_prompt?: string
 }
 
 export type Database = {
