@@ -7,17 +7,18 @@
 
 import React, { memo } from 'react';
 import { useDroppable } from '@dnd-kit/core';
-import type { KanbanTask } from '../../types/kanban';
+import type { Task } from '../../services/supabase';
 import { TaskCard } from './TaskCard';
 import { Badge } from '../ui/badge';
 
 interface KanbanColumnProps {
   id: string;
   name: string;
-  tasks: KanbanTask[];
-  onTaskClick?: (task: KanbanTask) => void;
-  onAssignClick?: (task: KanbanTask) => void;
-  onDoneClick?: (task: KanbanTask) => void;
+  tasks: Task[];
+  onTaskClick?: (task: Task) => void;
+  onAssignClick?: (task: Task) => void;
+  onDoneClick?: (task: Task) => void;
+  onViewConversation?: (task: Task) => void;
   selectedTaskIds?: Set<string>;
   onSelectTask?: (taskId: string, selected: boolean) => void;
 }
@@ -29,6 +30,7 @@ export const KanbanColumn = memo(function KanbanColumn({
   onTaskClick,
   onAssignClick,
   onDoneClick,
+  onViewConversation,
   selectedTaskIds = new Set(),
   onSelectTask,
 }: KanbanColumnProps) {
@@ -77,6 +79,7 @@ export const KanbanColumn = memo(function KanbanColumn({
                 onClick={onTaskClick}
                 onAssignClick={onAssignClick}
                 onDoneClick={onDoneClick}
+                onViewConversation={onViewConversation}
                 isSelected={selectedTaskIds.has(task.id)}
                 onSelect={onSelectTask ? (selected) => onSelectTask(task.id, selected) : undefined}
               />

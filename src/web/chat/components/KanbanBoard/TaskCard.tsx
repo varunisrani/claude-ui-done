@@ -9,16 +9,17 @@
 import React, { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { KanbanTask } from '../../types/kanban';
+import type { Task } from '../../services/supabase';
 import { Badge } from '../ui/badge';
-import { Clock, Activity, AlertCircle, CheckCircle2, Pause, Loader2, Circle, CheckCircle } from 'lucide-react';
+import { Clock, Activity, AlertCircle, CheckCircle2, Pause, Loader2, Circle, CheckCircle, MessageSquare } from 'lucide-react';
 import { Checkbox } from '../ui/checkbox';
 
 interface TaskCardProps {
-  task: KanbanTask;
-  onClick?: (task: KanbanTask) => void;
-  onAssignClick?: (task: KanbanTask) => void;
-  onDoneClick?: (task: KanbanTask) => void;
+  task: Task;
+  onClick?: (task: Task) => void;
+  onAssignClick?: (task: Task) => void;
+  onDoneClick?: (task: Task) => void;
+  onViewConversation?: (task: Task) => void;
   isDragging?: boolean;
   isSelected?: boolean;
   onSelect?: (selected: boolean) => void;
@@ -29,6 +30,7 @@ export const TaskCard = memo(function TaskCard({
   onClick,
   onAssignClick,
   onDoneClick,
+  onViewConversation,
   isDragging = false,
   isSelected = false,
   onSelect
@@ -66,6 +68,12 @@ export const TaskCard = memo(function TaskCard({
       badge: 'bg-red-100 text-red-800 border-red-300',
       icon: '🔴',
     },
+    critical: {
+      bg: 'bg-purple-50',
+      border: 'border-l-purple-500',
+      badge: 'bg-purple-100 text-purple-800 border-purple-300',
+      icon: '⚡',
+    },
   };
 
   const statusConfig = {
@@ -74,10 +82,10 @@ export const TaskCard = memo(function TaskCard({
       icon: Clock,
       label: 'Idle',
     },
-    active: {
+    working: {
       color: 'bg-blue-100 text-blue-800',
       icon: Activity,
-      label: 'Active',
+      label: 'Working',
       animated: true,
     },
     paused: {
@@ -85,13 +93,7 @@ export const TaskCard = memo(function TaskCard({
       icon: Pause,
       label: 'Paused',
     },
-    waiting: {
-      color: 'bg-yellow-100 text-yellow-800',
-      icon: Loader2,
-      label: 'Waiting',
-      animated: true,
-    },
-    completed: {
+    success: {
       color: 'bg-green-100 text-green-800',
       icon: CheckCircle2,
       label: 'Completed',
@@ -103,7 +105,7 @@ export const TaskCard = memo(function TaskCard({
     },
   };
 
-  const priority = priorityConfig[task.priority];
+  const priority = priorityConfig[task.priority] || priorityConfig.medium;
 
   return (
     <div
@@ -154,16 +156,16 @@ export const TaskCard = memo(function TaskCard({
       </p>
 
       {/* Progress Bar */}
-      {task.progress !== undefined && task.progress > 0 && (
+      {task.completion_percentage !== undefined && task.completion_percentage > 0 && (
         <div className="mb-3">
           <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
             <span>Progress</span>
-            <span className="font-medium">{task.progress}%</span>
+            <span className="font-medium">{task.completion_percentage}%</span>
           </div>
           <div className="w-full bg-gray-200 rounded-full h-2">
             <div
               className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${task.progress}%` }}
+              style={{ width: `${task.completion_percentage}%` }}
             />
           </div>
         </div>
@@ -181,10 +183,10 @@ export const TaskCard = memo(function TaskCard({
       )}
 
       {/* Agent Status Indicator */}
-      {task.agentStatus && task.agentStatus !== 'idle' && (
+      {task.agent_status && task.agent_status !== 'idle' && (
         <div className="mb-3">
           {(() => {
-            const config = statusConfig[task.agentStatus];
+            const config = statusConfig[task.agent_status];
             const StatusIcon = config.icon;
 
             return (
@@ -194,9 +196,9 @@ export const TaskCard = memo(function TaskCard({
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium">{config.label}</p>
-                  {task.statusMessage && (
+                  {task.agent_response && (
                     <p className="text-xs opacity-80 truncate">
-                      {task.statusMessage}
+                      {task.agent_response}
                     </p>
                   )}
                 </div>
@@ -207,7 +209,7 @@ export const TaskCard = memo(function TaskCard({
       )}
 
       {/* Assign Button (only for new tasks) */}
-      {task.column === 'new' && task.agentStatus === 'idle' && (
+      {task.column_name === 'todo' && task.agent_status === 'idle' && (
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -244,6 +246,20 @@ export const TaskCard = memo(function TaskCard({
         >
           <CheckCircle className="w-4 h-4" />
           Mark as Done
+        </button>
+      )}
+
+      {/* View Conversation Button (for tasks with associated conversations) */}
+      {task.agent_conversation_id && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onViewConversation?.(task);
+          }}
+          className="mt-2 w-full px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
+        >
+          <MessageSquare className="w-4 h-4" />
+          View Conversation
         </button>
       )}
 

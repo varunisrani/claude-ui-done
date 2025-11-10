@@ -6,9 +6,9 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
-import { kanbanStorage } from '../services/kanban-storage';
+import { kanbanTasksService } from '../../services/kanbanTasks';
 import { api } from '../services/api';
-import type { KanbanTask, KanbanBoard, CreateTaskRequest } from '../types/kanban';
+import type { Task } from '../../services/supabase';
 
 /**
  * Deduplicate tasks array by ID, keeping the first occurrence of each task
@@ -26,106 +26,89 @@ function deduplicateTasks(tasks: KanbanTask[]): KanbanTask[] {
 }
 
 interface KanbanContextValue {
-  boards: KanbanBoard[];
-  activeBoard: KanbanBoard | null;
-  tasks: KanbanTask[];
+  tasks: Task[];
   loading: boolean;
   error: string | null;
 
-  // Board operations
-  selectBoard: (boardId: string) => void;
-  createBoard: (name: string) => KanbanBoard;
-
   // Task operations
-  createTask: (request: CreateTaskRequest) => KanbanTask;
+  createTask: (request: Omit<Task, 'id' | 'created_at' | 'updated_at'>) => Promise<Task>;
   assignTaskToAgent: (taskId: string) => Promise<string>; // Returns sessionId
-  markTaskAsDone: (taskId: string) => void;
-  moveTask: (taskId: string, targetColumn: string, targetPosition: number) => void;
-  updateTask: (taskId: string, updates: Partial<KanbanTask>) => void;
-  deleteTask: (taskId: string) => void;
-  refreshTasks: () => void;
-  syncTask: (taskId: string) => void;
-  validateAndSyncTasks: () => void;
+  markTaskAsDone: (taskId: string) => Promise<void>;
+  moveTask: (taskId: string, targetColumn: 'todo' | 'in_progress' | 'done') => Promise<void>;
+  updateTask: (taskId: string, updates: Partial<Task>) => Promise<void>;
+  deleteTask: (taskId: string) => Promise<void>;
+  refreshTasks: () => Promise<void>;
+  getTaskStats: () => Promise<any>;
 
   // Background task operations
-  getBackgroundTasks: () => KanbanTask[];
+  getBackgroundTasks: () => Task[];
   monitorBackgroundTask: (sessionId: string) => Promise<void>;
   stopBackgroundMonitoring: (sessionId: string) => void;
 
   // Get tasks by column
-  getTasksByColumn: (columnId: string) => KanbanTask[];
+  getTasksByColumn: (columnName: 'todo' | 'in_progress' | 'done') => Task[];
+
+  // Search and filter
+  searchTasks: (query: string) => Promise<Task[]>;
+  getTasksByPriority: (priority: 'low' | 'medium' | 'high' | 'critical') => Promise<Task[]>;
 }
 
 const KanbanContext = createContext<KanbanContextValue | null>(null);
 
 export function KanbanProvider({ children }: { children: ReactNode }) {
-  const [boards, setBoards] = useState<KanbanBoard[]>([]);
-  const [activeBoard, setActiveBoard] = useState<KanbanBoard | null>(null);
-  const [tasks, setTasks] = useState<KanbanTask[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load boards and tasks from localStorage on mount
+  // Load tasks from Supabase on mount
   useEffect(() => {
+    loadTasks();
+    subscribeToRealtime();
+
+    return () => {
+      kanbanTasksService.unsubscribeFromTasks();
+    };
+  }, []);
+
+  const loadTasks = async () => {
     try {
       setLoading(true);
-      const loadedBoards = kanbanStorage.getBoards();
-      setBoards(loadedBoards);
-
-      // Select first board by default
-      if (loadedBoards.length > 0) {
-        setActiveBoard(loadedBoards[0]);
-        const loadedTasks = kanbanStorage.getTasks(loadedBoards[0].id);
-        const deduplicatedTasks = deduplicateTasks(loadedTasks);
-        setTasks(deduplicatedTasks);
-      }
+      const loadedTasks = await kanbanTasksService.getTasks();
+      setTasks(loadedTasks);
     } catch (err: any) {
-      setError(err.message || 'Failed to load Kanban data');
+      setError(err.message || 'Failed to load tasks from Supabase');
+      console.error('Failed to load tasks:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  };
 
-  // Select board
-  const selectBoard = useCallback((boardId: string) => {
-    const board = kanbanStorage.getBoard(boardId);
-    if (board) {
-      setActiveBoard(board);
-      const boardTasks = kanbanStorage.getTasks(boardId);
-      const deduplicatedTasks = deduplicateTasks(boardTasks);
-      setTasks(deduplicatedTasks);
-    }
-  }, []);
-
-  // Create board
-  const createBoard = useCallback((name: string): KanbanBoard => {
-    const newBoard = kanbanStorage.createBoard(name);
-    setBoards(prev => [...prev, newBoard]);
-    return newBoard;
-  }, []);
+  const subscribeToRealtime = () => {
+    kanbanTasksService.subscribeToTasks((payload) => {
+      console.log('🔄 Real-time task update:', payload);
+      loadTasks(); // Reload all tasks on any change
+    });
+  };
 
   // Create task
-  const createTask = useCallback((request: CreateTaskRequest): KanbanTask => {
-    if (!activeBoard) {
-      throw new Error('No active board selected');
+  const createTask = useCallback(async (request: Omit<Task, 'id' | 'created_at' | 'updated_at'>): Promise<Task> => {
+    try {
+      const newTask = await kanbanTasksService.createTask(request);
+      setTasks(prev => {
+        // Ensure no duplicates by checking IDs
+        const existingIds = new Set(prev.map(t => t.id));
+        if (existingIds.has(newTask.id)) {
+          console.warn('⚠️ [KanbanContext] Task ID already exists, skipping add:', newTask.id);
+          return prev;
+        }
+        return [...prev, newTask];
+      });
+      return newTask;
+    } catch (err: any) {
+      console.error('Failed to create task:', err);
+      throw err;
     }
-
-    const newTask = kanbanStorage.createTask({
-      ...request,
-      boardId: activeBoard.id,
-    });
-
-    setTasks(prev => {
-      // Ensure no duplicates by checking IDs
-      const existingIds = new Set(prev.map(t => t.id));
-      if (existingIds.has(newTask.id)) {
-        console.warn('⚠️ [KanbanContext] Task ID already exists, skipping add:', newTask.id);
-        return prev;
-      }
-      return [...prev, newTask];
-    });
-    return newTask;
-  }, [activeBoard]);
+  }, []);
 
   
   // Assign task to agent (uses existing conversation API)
@@ -143,16 +126,14 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
       id: task.id,
       title: task.title,
       description: task.description?.substring(0, 100) + '...',
-      workingDirectory: task.workingDirectory,
+      workingDirectory: task.working_directory,
       priority: task.priority,
       tags: task.tags
     });
 
     const conversationPayload = {
-      workingDirectory: task.workingDirectory || process.cwd(),
+      workingDirectory: task.working_directory || process.cwd(),
       initialPrompt: `${task.title}\n\n${task.description}`,
-      model: task.model === 'default' ? undefined : task.model,
-      permissionMode: task.permissionMode === 'default' ? undefined : task.permissionMode,
     };
 
     try {
@@ -171,14 +152,17 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
         hasSystemInit: !!response.systemInit
       });
 
-      console.log('💾 [KanbanContext] Updating task in localStorage...');
-      // Update task in localStorage with conversation details
-      const updatedTask = kanbanStorage.updateTask(taskId, {
-        sessionId: response.sessionId,
-        streamingId: response.streamingId,
-        column: 'inprogress',
-        agentStatus: 'active',
-        assignedAt: new Date().toISOString(),
+      console.log('💾 [KanbanContext] Updating task in Supabase...');
+      // Update task in Supabase with conversation details
+      const updatedTask = await kanbanTasksService.updateTask(taskId, {
+        agent_id: response.streamingId,
+        agent_conversation_id: response.sessionId,
+        agent_status: 'working',
+        assigned_to: 'agent',
+        assigned_at: new Date().toISOString(),
+        column_name: 'in_progress',
+        started_at: new Date().toISOString(),
+        completion_percentage: 10,
       });
 
       console.log('🔄 [KanbanContext] Updating local state...');
@@ -204,7 +188,7 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
   }, [tasks]);
 
   // Mark task as done
-  const markTaskAsDone = useCallback((taskId: string) => {
+  const markTaskAsDone = useCallback(async (taskId: string) => {
     console.log('🎯 [KanbanContext] markTaskAsDone called with task ID:', taskId);
 
     const task = tasks.find(t => t.id === taskId);
@@ -216,142 +200,84 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
     console.log('📋 [KanbanContext] Marking task as done:', {
       id: task.id,
       title: task.title,
-      currentColumn: task.column,
-      currentAgentStatus: task.agentStatus
+      currentColumn: task.column_name,
+      currentAgentStatus: task.agent_status
     });
 
-    // Update task in localStorage with done status
-    const updatedTask = kanbanStorage.updateTask(taskId, {
-      column: 'done',
-      agentStatus: 'completed',
-      completedAt: new Date().toISOString(),
-      statusMessage: 'Task completed manually'
-    });
+    try {
+      // Update task in Supabase with done status
+      const updatedTask = await kanbanTasksService.moveTaskColumn(taskId, 'done');
 
-    // Update state
-    setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+      // Update state
+      setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
 
-    console.log('✅ [KanbanContext] Task marked as done successfully');
+      console.log('✅ [KanbanContext] Task marked as done successfully');
+    } catch (err: any) {
+      console.error('❌ [KanbanContext] Failed to mark task as done:', err);
+      throw err;
+    }
   }, [tasks]);
 
   // Move task
-  const moveTask = useCallback((
-    taskId: string,
-    targetColumn: string,
-    targetPosition: number
-  ) => {
-    const updatedTask = kanbanStorage.moveTask(taskId, targetColumn, targetPosition);
-    setTasks(kanbanStorage.getTasks(activeBoard?.id));
-  }, [activeBoard]);
+  const moveTask = useCallback(async (taskId: string, targetColumn: 'todo' | 'in_progress' | 'done') => {
+    try {
+      const updatedTask = await kanbanTasksService.moveTaskColumn(taskId, targetColumn);
+      setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+    } catch (err: any) {
+      console.error('❌ [KanbanContext] Failed to move task:', err);
+      throw err;
+    }
+  }, []);
 
   // Update task
-  const updateTask = useCallback((taskId: string, updates: Partial<KanbanTask>) => {
-    const updatedTask = kanbanStorage.updateTask(taskId, updates);
-    setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+  const updateTask = useCallback(async (taskId: string, updates: Partial<Task>) => {
+    try {
+      const updatedTask = await kanbanTasksService.updateTask(taskId, updates);
+      setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+    } catch (err: any) {
+      console.error('❌ [KanbanContext] Failed to update task:', err);
+      throw err;
+    }
   }, []);
 
   // Delete task
-  const deleteTask = useCallback((taskId: string) => {
-    kanbanStorage.deleteTask(taskId);
-    setTasks(prev => prev.filter(t => t.id !== taskId));
-  }, []);
-
-  // Refresh tasks (reload from localStorage)
-  const refreshTasks = useCallback(() => {
-    if (activeBoard) {
-      const loadedTasks = kanbanStorage.getTasks(activeBoard.id);
-      const deduplicatedTasks = deduplicateTasks(loadedTasks);
-      setTasks(deduplicatedTasks);
-      console.log('🔄 [KanbanContext] Refreshed tasks from localStorage:', deduplicatedTasks.length);
-    }
-  }, [activeBoard]);
-
-  // Synchronize specific task from localStorage to state
-  const syncTask = useCallback((taskId: string) => {
-    const task = kanbanStorage.getTask(taskId);
-    if (task) {
-      setTasks(prev => {
-        const existingIndex = prev.findIndex(t => t.id === taskId);
-        if (existingIndex >= 0) {
-          const newTasks = [...prev];
-          newTasks[existingIndex] = task;
-          console.log('🔄 [KanbanContext] Synced task from localStorage:', taskId);
-          return newTasks;
-        }
-        return [...prev, task];
-      });
+  const deleteTask = useCallback(async (taskId: string) => {
+    try {
+      await kanbanTasksService.deleteTask(taskId);
+      setTasks(prev => prev.filter(t => t.id !== taskId));
+    } catch (err: any) {
+      console.error('❌ [KanbanContext] Failed to delete task:', err);
+      throw err;
     }
   }, []);
 
-  // Validate and sync all tasks with localStorage
-  const validateAndSyncTasks = useCallback(() => {
-    if (!activeBoard) return;
+  // Refresh tasks (reload from Supabase)
+  const refreshTasks = useCallback(async () => {
+    await loadTasks();
+  }, []);
 
-    const storageTasks = kanbanStorage.getTasks(activeBoard.id);
-    const stateTaskIds = new Set(tasks.map(t => t.id));
-    const storageTaskIds = new Set(storageTasks.map(t => t.id));
-
-    // Find tasks in state but not in storage (orphaned)
-    const orphanedTasks = tasks.filter(t => !storageTaskIds.has(t.id));
-    if (orphanedTasks.length > 0) {
-      console.warn('⚠️ [KanbanContext] Found orphaned tasks in state:', orphanedTasks.map(t => t.id));
-      // Remove orphaned tasks from state
-      setTasks(prev => prev.filter(t => storageTaskIds.has(t.id)));
-      return; // Exit early to avoid race conditions
+  // Get task statistics
+  const getTaskStats = useCallback(async () => {
+    try {
+      return await kanbanTasksService.getTaskStats();
+    } catch (err: any) {
+      console.error('❌ [KanbanContext] Failed to get task stats:', err);
+      throw err;
     }
-
-    // Find tasks in storage but not in state (missing)
-    const missingTasks = storageTasks.filter(t => !stateTaskIds.has(t.id));
-    if (missingTasks.length > 0) {
-      console.warn('⚠️ [KanbanContext] Found missing tasks in state:', missingTasks.map(t => t.id));
-      // Add missing tasks to state, ensuring no duplicates by checking current state
-      setTasks(prev => {
-        const currentTaskIds = new Set(prev.map(t => t.id));
-        const actuallyMissing = missingTasks.filter(t => !currentTaskIds.has(t.id));
-        return actuallyMissing.length > 0 ? [...prev, ...actuallyMissing] : prev;
-      });
-    }
-
-    console.log('✅ [KanbanContext] Task validation complete. State:', tasks.length, 'Storage:', storageTasks.length);
-  }, [activeBoard, tasks]);
-
-  // Periodic validation and sync (every 30 seconds)
-  useEffect(() => {
-    if (!activeBoard) return;
-
-    const validationInterval = setInterval(() => {
-      validateAndSyncTasks();
-    }, 30000); // 30 seconds
-
-    return () => clearInterval(validationInterval);
-  }, [activeBoard, validateAndSyncTasks]);
-
-  // Validate on window focus (when user returns to the app)
-  useEffect(() => {
-    const handleFocus = () => {
-      if (activeBoard) {
-        validateAndSyncTasks();
-      }
-    };
-
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [activeBoard, validateAndSyncTasks]);
+  }, []);
 
   // Get tasks by column
-  const getTasksByColumn = useCallback((columnId: string): KanbanTask[] => {
-    return tasks
-      .filter(t => t.column === columnId)
-      .sort((a, b) => a.position - b.position);
+  const getTasksByColumn = useCallback((columnName: 'todo' | 'in_progress' | 'done'): Task[] => {
+    return tasks.filter(t => t.column_name === columnName);
   }, [tasks]);
 
   // Get background tasks (tasks with active agents that user isn't watching)
-  const getBackgroundTasks = useCallback((): KanbanTask[] => {
+  const getBackgroundTasks = useCallback((): Task[] => {
     return tasks.filter(t =>
-      t.agentStatus === 'active' &&
-      t.sessionId &&
+      t.agent_status === 'working' &&
+      t.agent_id &&
       // Don't include tasks that are currently being viewed in chat
-      !window.location.pathname.includes(`/c/${t.sessionId}`)
+      !window.location.pathname.includes(`/c/${t.agent_id}`)
     );
   }, [tasks]);
 
@@ -364,47 +290,45 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
       const status = await api.getConversationStatus(sessionId);
 
       // Find the corresponding task
-      const task = tasks.find(t => t.sessionId === sessionId);
+      const task = tasks.find(t => t.agent_id === sessionId);
       if (!task) {
         console.warn('⚠️ [KanbanContext] Task not found for session:', sessionId);
         return;
       }
 
       // Update task based on conversation status
-      let updates: Partial<KanbanTask> = {};
+      let updates: Partial<Task> = {};
 
       if (status.completed) {
         updates = {
-          agentStatus: 'completed',
-          column: 'done',
-          completedAt: new Date().toISOString(),
-          statusMessage: 'Task completed successfully',
-          progress: 100
+          agent_status: 'success',
+          column_name: 'done',
+          completed_at: new Date().toISOString(),
+          agent_response: 'Task completed successfully',
+          completion_percentage: 100
         };
         console.log('✅ [KanbanContext] Background task completed:', task.title);
       } else if (status.error) {
         updates = {
-          agentStatus: 'error',
-          statusMessage: `Error: ${status.error}`,
-          progress: undefined
+          agent_status: 'error',
+          error_message: `Error: ${status.error}`,
         };
         console.error('❌ [KanbanContext] Background task failed:', task.title, status.error);
       } else if (status.statusMessage) {
         updates = {
-          statusMessage: status.statusMessage,
-          progress: status.progress
+          agent_response: status.statusMessage,
+          completion_percentage: status.progress || 0,
         };
       }
 
       // Apply updates if any
       if (Object.keys(updates).length > 0) {
-        const updatedTask = kanbanStorage.updateTask(task.id, updates);
-        setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+        await updateTask(task.id, updates);
       }
     } catch (error) {
       console.error('❌ [KanbanContext] Failed to monitor background task:', error);
     }
-  }, [tasks]);
+  }, [tasks, updateTask]);
 
   // Stop background monitoring for a session
   const stopBackgroundMonitoring = useCallback((sessionId: string) => {
@@ -413,14 +337,30 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
     // For now, this is mainly for logging and cleanup
   }, []);
 
+  // Search tasks
+  const searchTasks = useCallback(async (query: string): Promise<Task[]> => {
+    try {
+      return await kanbanTasksService.searchTasks(query);
+    } catch (err: any) {
+      console.error('❌ [KanbanContext] Failed to search tasks:', err);
+      throw err;
+    }
+  }, []);
+
+  // Get tasks by priority
+  const getTasksByPriority = useCallback(async (priority: 'low' | 'medium' | 'high' | 'critical'): Promise<Task[]> => {
+    try {
+      return await kanbanTasksService.getTasksByPriority(priority);
+    } catch (err: any) {
+      console.error('❌ [KanbanContext] Failed to get tasks by priority:', err);
+      throw err;
+    }
+  }, []);
+
   const value: KanbanContextValue = {
-    boards,
-    activeBoard,
     tasks,
     loading,
     error,
-    selectBoard,
-    createBoard,
     createTask,
     assignTaskToAgent,
     markTaskAsDone,
@@ -428,12 +368,13 @@ export function KanbanProvider({ children }: { children: ReactNode }) {
     updateTask,
     deleteTask,
     refreshTasks,
-    syncTask,
-    validateAndSyncTasks,
+    getTaskStats,
     getBackgroundTasks,
     monitorBackgroundTask,
     stopBackgroundMonitoring,
     getTasksByColumn,
+    searchTasks,
+    getTasksByPriority,
   };
 
   return <KanbanContext.Provider value={value}>{children}</KanbanContext.Provider>;

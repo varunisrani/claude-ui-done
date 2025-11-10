@@ -193,9 +193,10 @@ export class CUIServer {
         this.logger.debug('MCP config generated and set', { path: mcpConfigPath });
       } catch (error) {
         const isTestEnv = process.env.NODE_ENV === 'test';
-        
-        if (isTestEnv) {
-          this.logger.warn('MCP config generation failed in test environment, proceeding without MCP', {
+        const isDevEnv = process.env.NODE_ENV === 'development';
+
+        if (isTestEnv || isDevEnv) {
+          this.logger.warn('MCP config generation failed in ' + (isTestEnv ? 'test' : 'development') + ' environment, proceeding without MCP', {
             error: error instanceof Error ? error.message : String(error)
           });
           // Don't set MCP config path - conversations will run without MCP

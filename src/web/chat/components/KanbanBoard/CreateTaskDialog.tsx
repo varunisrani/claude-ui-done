@@ -129,10 +129,38 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
         description: description.trim(),
         priority,
         tags: tags.split(',').map(t => t.trim()).filter(t => t.length > 0),
-        workingDirectory: workingDirectory.trim() || undefined,
-        // Store model and permission mode in tags or metadata for later use
-        model: model === 'default' ? undefined : model,
-        permissionMode: permissionMode === 'default' ? undefined : permissionMode,
+        working_directory: workingDirectory.trim() || undefined,
+        column_name: 'todo',
+        // Set default values for required fields
+        status: 'todo',
+        agent_status: 'idle',
+        model_permission_level: permissionMode === 'default' ? 'standard' :
+          permissionMode === 'elevated' ? 'elevated' : 'restricted',
+        task_type: 'general',
+        complexity_level: 'medium',
+        retry_count: 0,
+        max_retries: 3,
+        timeout_minutes: 60,
+        completion_percentage: 0,
+        environment: 'development',
+        archived: false,
+        compliance_requirements: [],
+        notification_preferences: { email: true, slack: false },
+        custom_fields: {},
+        integration_links: {},
+        external_references: [],
+        approval_chain: [],
+        resource_allocation: {},
+        performance_metrics: {},
+        user_stories: [],
+        acceptance_criteria: [],
+        definition_of_done: {},
+        model_access_requirements: model === 'default' ? {} : {
+          min_model_version: model,
+          requires_special_permissions: permissionMode !== 'default',
+          access_level: permissionMode
+        },
+        logs: [],
       });
 
       // Reset form

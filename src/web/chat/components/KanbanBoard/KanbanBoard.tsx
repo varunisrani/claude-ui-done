@@ -33,26 +33,26 @@ import { TaskCard } from './TaskCard';
 import { BackgroundTaskMonitor } from './BackgroundTaskMonitor';
 import { Button } from '../ui/button';
 import { Settings, Download, Upload, Bot, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import type { KanbanTask } from '../../types/kanban';
+import type { Task } from '../../services/supabase';
 
 export function KanbanBoard() {
   const navigate = useNavigate();
-  const { activeBoard, getTasksByColumn, loading, error, tasks, refreshTasks, moveTask, deleteTask, markTaskAsDone } = useKanban();
+  const { getTasksByColumn, loading, error, tasks, refreshTasks, moveTask, deleteTask, markTaskAsDone } = useKanban();
 
   // Dialog states
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [assignDialogState, setAssignDialogState] = useState<{
     open: boolean;
-    task: KanbanTask | null;
+    task: Task | null;
   }>({ open: false, task: null });
   const [detailsDialogState, setDetailsDialogState] = useState<{
     open: boolean;
-    task: KanbanTask | null;
+    task: Task | null;
   }>({ open: false, task: null });
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Drag and drop state
-  const [activeTask, setActiveTask] = useState<KanbanTask | null>(null);
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
 
   // Filters and search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -272,22 +272,13 @@ export function KanbanBoard() {
     );
   }, [priorityFilters, statusFilters, tagFilters, columnFilters, searchQuery]);
 
-  if (!activeBoard) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <h2 className="text-xl font-semibold text-gray-700 mb-2">No board found</h2>
-          <p className="text-gray-500">Creating default board...</p>
-        </div>
-      </div>
-    );
-  }
+  // No activeBoard check needed - we work directly with tasks from Supabase
 
-  const handleTaskClick = (task: KanbanTask) => {
+  const handleTaskClick = (task: Task) => {
     setDetailsDialogState({ open: true, task });
   };
 
-  const handleAssignClick = (task: KanbanTask) => {
+  const handleAssignClick = (task: Task) => {
     setAssignDialogState({ open: true, task });
   };
 
@@ -295,8 +286,15 @@ export function KanbanBoard() {
     navigate(`/c/${sessionId}`);
   };
 
-  const handleDoneClick = (task: KanbanTask) => {
+  const handleDoneClick = (task: Task) => {
     markTaskAsDone(task.id);
+  };
+
+  const handleViewConversation = (task: Task) => {
+    // Navigate to the conversation (button only shows when conversation exists)
+    if (task.agent_conversation_id) {
+      navigate(`/c/${task.agent_conversation_id}`);
+    }
   };
 
   if (loading) {
@@ -337,7 +335,7 @@ export function KanbanBoard() {
                 </svg>
               </button>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">{activeBoard.name}</h1>
+                <h1 className="text-2xl font-bold text-gray-900">Task Board</h1>
                 <p className="text-sm text-gray-500">
                   {filteredTasks.length} of {tasks.length} tasks
                   {selectedTaskIds.size > 0 && ` · ${selectedTaskIds.size} selected`}
@@ -428,30 +426,33 @@ export function KanbanBoard() {
           {/* Kanban Columns */}
           <div className={`${showBackgroundMonitor ? 'flex-1' : 'w-full'} overflow-x-auto p-6`}>
             <div className="flex gap-6 h-full min-w-max">
-              {activeBoard.columns
-                .sort((a, b) => a.position - b.position)
-                .map(column => {
-                  const columnTasks = filteredTasks.filter(t => t.column === column.id);
-                  return (
-                    <SortableContext
-                      key={column.id}
+              {[
+                { id: 'todo', name: 'To Do' },
+                { id: 'in_progress', name: 'In Progress' },
+                { id: 'done', name: 'Done' }
+              ].map(column => {
+                const columnTasks = getTasksByColumn(column.id as 'todo' | 'in_progress' | 'done');
+                return (
+                  <SortableContext
+                    key={column.id}
+                    id={column.id}
+                    items={columnTasks.map(t => t.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <KanbanColumn
                       id={column.id}
-                      items={columnTasks.map(t => t.id)}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      <KanbanColumn
-                        id={column.id}
-                        name={column.name}
-                        tasks={columnTasks}
-                        onTaskClick={handleTaskClick}
-                        onAssignClick={handleAssignClick}
-                        onDoneClick={handleDoneClick}
-                        selectedTaskIds={selectedTaskIds}
-                        onSelectTask={handleSelectTask}
-                      />
-                    </SortableContext>
-                  );
-                })}
+                      name={column.name}
+                      tasks={columnTasks}
+                      onTaskClick={handleTaskClick}
+                      onAssignClick={handleAssignClick}
+                      onDoneClick={handleDoneClick}
+                      onViewConversation={handleViewConversation}
+                      selectedTaskIds={selectedTaskIds}
+                      onSelectTask={handleSelectTask}
+                    />
+                  </SortableContext>
+                );
+              })}
             </div>
           </div>
 
