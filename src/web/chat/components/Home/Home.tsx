@@ -126,21 +126,29 @@ export function Home() {
         <div className="flex flex-col h-full w-full">
           <div className="z-0 mx-auto flex flex-col w-full max-w-3xl h-full">
             <div className="sticky top-0 z-50 flex flex-col items-center bg-background">
-              <div className="flex items-center gap-3 mb-4 pt-4">
-                <div className="flex items-center">
-                  <div className="w-[27px] h-[27px] flex items-center justify-center">
-                    <svg width="24" height="24" viewBox="4.5 5.2 11.7 13.3" fill="currentColor">
-                      <circle cx="10.3613" cy="6.44531" r="1.03516" />
-                      <circle cx="5.69336" cy="9.15039" r="1.03516" />
-                      <circle cx="15.0195" cy="9.15039" r="1.03516" />
-                      <circle cx="5.69336" cy="14.5801" r="1.03516" />
-                      <circle cx="15.0195" cy="14.5801" r="1.03516" />
-                      <circle cx="10.3613" cy="17.2754" r="1.03516" />
-                      <path d="M10.3613 13.4961C11.2695 13.4961 11.9922 12.7734 11.9922 11.8652C11.9922 10.9668 11.25 10.2344 10.3613 10.2344C9.47266 10.2344 8.73047 10.9766 8.73047 11.8652C8.73047 12.7539 9.46289 13.4961 10.3613 13.4961Z" />
-                    </svg>
+              <div className="flex items-center justify-between w-full mb-4 pt-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center">
+                    <div className="w-[27px] h-[27px] flex items-center justify-center">
+                      <svg width="24" height="24" viewBox="4.5 5.2 11.7 13.3" fill="currentColor">
+                        <circle cx="10.3613" cy="6.44531" r="1.03516" />
+                        <circle cx="5.69336" cy="9.15039" r="1.03516" />
+                        <circle cx="15.0195" cy="9.15039" r="1.03516" />
+                        <circle cx="5.69336" cy="14.5801" r="1.03516" />
+                        <circle cx="15.0195" cy="14.5801" r="1.03516" />
+                        <circle cx="10.3613" cy="17.2754" r="1.03516" />
+                        <path d="M10.3613 13.4961C11.2695 13.4961 11.9922 12.7734 11.9922 11.8652C11.9922 10.9668 11.25 10.2344 10.3613 10.2344C9.47266 10.2344 8.73047 10.9766 8.73047 11.8652C8.73047 12.7539 9.46289 13.4961 10.3613 13.4961Z" />
+                      </svg>
+                    </div>
                   </div>
+                  <h1 className="text-2xl font-semibold font-sans text-foreground">What is the next task?</h1>
                 </div>
-                <h1 className="text-2xl font-semibold font-sans text-foreground">What is the next task?</h1>
+                <button
+                  onClick={() => navigate('/kanban')}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
+                >
+                  Kanban Board
+                </button>
               </div>
               
               <div className="w-full">
